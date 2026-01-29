@@ -13,7 +13,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
   # ---- SINGLE SOURCE OF TRUTH ----
-  EDK2_BRANCH: "edk2-stable202508"
+  EDK2_BRANCH: "edk2-stable202502"
   # --------------------------------
 
 jobs:

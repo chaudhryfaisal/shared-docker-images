@@ -24,7 +24,7 @@ RUN mkdir -p "${CONF_PATH}"
 RUN make -C BaseTools -j$(nproc)
 
 # ---- build SNP-capable OVMF ----
-RUN source edksetup.sh && build -a X64 -t GCC5 -b RELEASE -p OvmfPkg/OvmfPkgX64.dsc
+RUN bash -c "source edksetup.sh && build -a X64 -t GCC5 -b RELEASE -p OvmfPkg/OvmfPkgX64.dsc"
 
 # ---- export firmware ----
 FROM debian:12-slim AS ovmf

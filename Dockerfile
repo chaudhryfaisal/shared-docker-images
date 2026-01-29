@@ -1,21 +1,50 @@
-ARG RUST_VER=1.90
-FROM rust:${RUST_VER}-alpine AS rust_builder
-RUN apk add --no-cache build-base musl-dev perl linux-headers wget pkgconfig ca-certificates
-RUN rustup target add x86_64-unknown-linux-musl
+FROM debian:12-slim AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates git python3 python3-distutils python3-pip \
+    uuid-dev nasm acpica-tools iasl xz-utils flex bison curl wget \
+    && rm -rf /var/lib/apt/lists/*
+ARG EDK2_BRANCH=edk2-stable202508
+RUN git clone --depth 1 --branch ${EDK2_BRANCH} \
+    https://github.com/tianocore/edk2.git /build/edk2
 
-# Build static OpenSSL
-ARG OPENSSL_VERSION=3.2.1
-ENV OPENSSL_DIR=/opt/openssl \
-    OPENSSL_STATIC=1 \
-    OPENSSL_NO_VENDOR=1 \
-    PKG_CONFIG_ALLOW_CROSS=1 \
-    PKG_CONFIG_ALL_STATIC=1 \
-    PKG_CONFIG_PATH=/opt/openssl/lib/pkgconfig
-WORKDIR /tmp
+WORKDIR /build/edk2
 
-RUN wget https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz && \
-    tar xzf openssl-${OPENSSL_VERSION}.tar.gz && \
-    cd openssl-${OPENSSL_VERSION} && \
-    ./Configure linux-x86_64 no-shared no-dso no-tests --prefix=${OPENSSL_DIR} --openssldir=${OPENSSL_DIR}/ssl && \
-    make -j$(nproc) && make install_sw && rm -rf /tmp/openssl*
-WORKDIR /build
+RUN git submodule update --init --recursive --depth 1 --jobs 4 -- ':!UnitTestFrameworkPkg'
+
+# ---- edk2 env ----
+ENV WORKSPACE=/build/edk2
+ENV PACKAGES_PATH=/build/edk2
+ENV EDK_TOOLS_PATH=/build/edk2/BaseTools
+ENV PYTHON_COMMAND=python3
+ENV CONF_PATH=/build/edk2/Conf
+
+RUN mkdir -p "${CONF_PATH}"
+
+# ---- build basetools ----
+RUN make -C BaseTools -j$(nproc)
+
+# ---- build SNP-capable OVMF ----
+RUN bash -c "\
+    source edksetup.sh && \
+    build \
+      -a X64 \
+      -t GCC5 \
+      -b RELEASE \
+      -p OvmfPkg/OvmfPkgX64.dsc \
+      -D SECURE_BOOT_ENABLE=FALSE \
+      -D TPM2_ENABLE=TRUE \
+      -D AMD_SEV_ENABLE=TRUE \
+      -D AMD_SEV_ES_ENABLE=TRUE \
+      -D AMD_SEV_SNP_ENABLE=TRUE \
+"
+
+# ---- export firmware ----
+FROM debian:12-slim AS ovmf
+
+COPY --from=builder \
+  /build/edk2/Build/OvmfX64/RELEASE_GCC5/FV/OVMF_CODE.fd \
+  /output/OVMF_CODE.fd
+
+COPY --from=builder \
+  /build/edk2/Build/OvmfX64/RELEASE_GCC5/FV/OVMF_VARS.fd \
+  /output/OVMF_VARS.fd

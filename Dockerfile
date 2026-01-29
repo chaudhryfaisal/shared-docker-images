@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ca-certificates git python3 python3-distutils python3-pip \
     uuid-dev nasm acpica-tools iasl xz-utils flex bison curl wget \
     && rm -rf /var/lib/apt/lists/*
-ARG EDK2_BRANCH=edk2-stable202508
+ARG EDK2_BRANCH=edk2-stable202502
 RUN git clone --depth 1 --branch ${EDK2_BRANCH} \
     https://github.com/tianocore/edk2.git /build/edk2
 
@@ -30,12 +30,7 @@ RUN bash -c "\
       -a X64 \
       -t GCC5 \
       -b RELEASE \
-      -p OvmfPkg/OvmfPkgX64.dsc \
-      -D SECURE_BOOT_ENABLE=FALSE \
-      -D TPM2_ENABLE=TRUE \
-      -D AMD_SEV_ENABLE=TRUE \
-      -D AMD_SEV_ES_ENABLE=TRUE \
-      -D AMD_SEV_SNP_ENABLE=TRUE \
+      -p OvmfPkg/OvmfPkgX64.dsc
 "
 
 # ---- export firmware ----

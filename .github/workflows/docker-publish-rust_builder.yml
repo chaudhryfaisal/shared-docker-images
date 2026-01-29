@@ -1,5 +1,8 @@
-name: Docker
+name: rust_builder
 on:
+  push:
+   branches:
+    - rust_builder
   workflow_dispatch:
     inputs:
       rust_version:

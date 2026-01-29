@@ -1,28 +1,19 @@
-name: rust_builder
-
+name: edk2_ovmf
 on:
   push:
     branches:
-      - rust_builder
-
+      - edk2
   workflow_dispatch:
     inputs:
-      rust_version:
-        description: "Override Rust version (optional)"
+      edk2_branch:
+        description: "Override EDK2 Branch (optional)"
         required: false
-      openssl_version:
-        description: "Override OpenSSL version (optional)"
-        required: false
-
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
   # ---- SINGLE SOURCE OF TRUTH ----
-  RUST_VERSION: "1.90"
-  OPENSSL_VERSION: "3.2.1"
-  ALPINE_VERSION: "3.19"
-  LIBC: "musl"
+  EDK2_BRANCH: "edk2-stable202508"
   # --------------------------------
 
 jobs:
@@ -67,15 +58,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          RUST_VER="${{ inputs.rust_version || env.RUST_VERSION }}"
-          OPENSSL_VER="${{ inputs.openssl_version || env.OPENSSL_VERSION }}"
+          EDK2_BRANCH="${{ inputs.edk2_branch || env.EDK2_BRANCH }}"
 
-          DESC="Rust ${RUST_VER} toolchain with OpenSSL ${OPENSSL_VER}, built on Alpine ${ALPINE_VERSION} using ${LIBC} libc (static-friendly, musl-based image)"
-
-          echo "rust_version=$RUST_VER" >> "$GITHUB_OUTPUT"
-          echo "openssl_version=$OPENSSL_VER" >> "$GITHUB_OUTPUT"
+          DESC="EDK2 from ${EDK2_BRANCH}"
+          echo "edk2_branch=$EDK2_BRANCH" >> "$GITHUB_OUTPUT"
           echo "description=$DESC" >> "$GITHUB_OUTPUT"
-          echo "img_tag=${{ env.REGISTRY }}/${{ github.repository }}:ci-rust-musl-$RUST_VER-$OPENSSL_VER" >> "$GITHUB_OUTPUT"
+          echo "img_tag=${{ env.REGISTRY }}/${{ github.repository }}:ci-edk2-ovmf-${EDK2_BRANCH}" >> "$GITHUB_OUTPUT"
       # --------------------------------------
 
       - name: Build and push Docker image
@@ -88,13 +76,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            RUST_VER=${{ steps.versions.outputs.rust_version }}
-            OPENSSL_VERSION=${{ steps.versions.outputs.openssl_version }}
+            EDK2_BRANCH=${{ steps.versions.outputs.edk2_branch }}
           labels: |
             ${{ steps.meta.outputs.labels }}
-            org.opencontainers.image.title=Rust musl builder
+            org.opencontainers.image.title=EDK2
             org.opencontainers.image.description=${{ steps.versions.outputs.description }}
-            org.opencontainers.image.base.name=alpine:${{ env.ALPINE_VERSION }}
             org.opencontainers.image.vendor=${{ github.repository_owner }}
 
       - name: Sign the published Docker image

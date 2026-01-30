@@ -1,4 +1,4 @@
-name: AMDESE_AMDSEV
+name: AMDESE_AMDSEV_Optimized
 on:
   push:
     branches:
@@ -6,34 +6,30 @@ on:
   workflow_dispatch:
     inputs:
       AMDSEV_BRANCH:
-        description: "Override AMDSEV  Branch (optional)"
+        description: "Override AMDSEV Branch (optional)"
         required: false
+      skip_stages:
+        description: "Skip stages (comma-separated: deps,ovmf,qemu,host-kernel,guest-kernel)"
+        required: false
+        default: ""
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-
-  # ---- SINGLE SOURCE OF TRUTH ----
   AMDSEV_BRANCH: "snp-latest"
-  # --------------------------------
+  CCACHE_DIR: /tmp/ccache
+  CCACHE_MAXSIZE: 5G
 
 jobs:
-  build:
+  # ============================================================
+  # Stage 1: Dependency Installation & Caching
+  # ============================================================
+  prepare-dependencies:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360  # 6 hours max build time
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-
+    timeout-minutes: 30
+    outputs:
+      cache-key: ${{ steps.cache-deps.outputs.cache-primary-key }}
     steps:
-      - name: Resolve build versions
-        id: versions
-        shell: bash
-        run: |
-          set -euo pipefail
-          AMDSEV_BRANCH="${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}"
-          echo "AMDSEV_BRANCH=${AMDSEV_BRANCH}" | tee -a "$GITHUB_OUTPUT"
-
       - name: Maximize build space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -42,183 +38,560 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           df -h
-      
-      - name: Checkout repository
+
+      - name: Resolve build versions
+        id: versions
+        run: |
+          AMDSEV_BRANCH="${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}"
+          echo "AMDSEV_BRANCH=${AMDSEV_BRANCH}" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Checkout AMDSEV repository
         uses: actions/checkout@v4
         with:
           repository: AMDESE/AMDSEV
           ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
           fetch-depth: 1
-      
+
+      - name: Cache dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt
+            /var/lib/apt/lists
+          key: deps-ubuntu-22.04-${{ hashFiles('**/build.sh', '**/common.sh') }}
+          restore-keys: |
+            deps-ubuntu-22.04-
+
       - name: Install build dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            git \
-            libssl-dev \
-            libelf-dev \
-            flex \
-            bison \
-            bc \
-            python3 \
-            python3-pip \
-            ninja-build \
-            meson \
-            pkg-config \
-            libglib2.0-dev \
-            libpixman-1-dev \
-            iasl \
-            nasm \
-            uuid-dev \
-            acpica-tools \
-            libuuid1 \
-            libncurses5-dev \
-            wget \
-            curl \
-            rsync \
-            dpkg-dev \
-            debhelper \
-            dwarves \
-            gcc \
-            g++ \
-            make \
-            autoconf \
-            automake \
-            libtool
-      
-      - name: Display system information
+            build-essential git libssl-dev libelf-dev flex bison bc \
+            python3 python3-pip ninja-build meson pkg-config \
+            libglib2.0-dev libpixman-1-dev iasl nasm uuid-dev \
+            acpica-tools libuuid1 libncurses5-dev wget curl rsync \
+            dpkg-dev debhelper dwarves gcc g++ make autoconf automake \
+            libtool ccache
+
+      - name: Setup ccache
         run: |
-          echo "=== System Information ==="
-          uname -a
+          mkdir -p ${{ env.CCACHE_DIR }}
+          ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
+          ccache --set-config=compression=true
+          ccache -z
+
+  # ============================================================
+  # Stage 2: Build OVMF (UEFI Firmware) - ~15-30 min
+  # ============================================================
+  build-ovmf:
+    needs: prepare-dependencies
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    if: ${{ !contains(inputs.skip_stages, 'ovmf') }}
+    outputs:
+      ovmf-built: ${{ steps.build.outputs.success }}
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h
-          free -h
-          nproc
-          gcc --version
-      
-      - name: Build SNP packages
+
+      - name: Resolve versions
+        id: versions
         run: |
-          # Set build date for consistent directory naming
-          export BUILD_DATE=$(date +%Y-%m-%d)
-          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
-          
-          # Run the build script with package option
-          ./build.sh --package
-          
-          # Find the created release directory
-          RELEASE_DIR=$(ls -d snp-release-* | head -n 1)
-          echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
-          
-          # Display what was built
-          echo "=== Build completed. Contents of $RELEASE_DIR: ==="
-          ls -lah "$RELEASE_DIR/"
-          
-          # Show size of the release directory
-          du -sh "$RELEASE_DIR"
-      
-      - name: List kernel packages
+          echo "AMDSEV_BRANCH=${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Checkout AMDSEV
+        uses: actions/checkout@v4
+        with:
+          repository: AMDESE/AMDSEV
+          ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
+          fetch-depth: 1
+
+      - name: Restore dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /var/cache/apt
+            /var/lib/apt/lists
+          key: ${{ needs.prepare-dependencies.outputs.cache-key }}
+
+      - name: Install dependencies
         run: |
-          echo "=== Host Kernel Packages ==="
-          ls -lh "${{ env.RELEASE_DIR }}/linux/host/" || echo "No host packages found"
-          
-          echo "=== Guest Kernel Packages ==="
-          ls -lh "${{ env.RELEASE_DIR }}/linux/guest/" || echo "No guest packages found"
-      
-      - name: List QEMU and OVMF binaries
+          sudo apt-get install -y iasl nasm uuid-dev acpica-tools \
+            python3 python3-pip build-essential git
+
+      - name: Cache OVMF source
+        id: cache-ovmf-src
+        uses: actions/cache@v4
+        with:
+          path: ovmf/
+          key: ovmf-src-${{ steps.versions.outputs.AMDSEV_BRANCH }}-${{ hashFiles('**/stable-commits') }}
+          restore-keys: |
+            ovmf-src-${{ steps.versions.outputs.AMDSEV_BRANCH }}-
+
+      - name: Cache OVMF build
+        id: cache-ovmf-build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ovmf/Build/
+            usr/local/share/qemu/OVMF*.fd
+          key: ovmf-build-${{ steps.versions.outputs.AMDSEV_BRANCH }}-${{ hashFiles('ovmf/**/*.c', 'ovmf/**/*.h', '**/stable-commits') }}
+          restore-keys: |
+            ovmf-build-${{ steps.versions.outputs.AMDSEV_BRANCH }}-
+
+      - name: Build OVMF
+        id: build
+        if: steps.cache-ovmf-build.outputs.cache-hit != 'true'
         run: |
-          echo "=== QEMU Binaries ==="
-          find "${{ env.RELEASE_DIR }}" -name "*qemu*" -type f || echo "No QEMU binaries found"
-          
-          echo "=== OVMF Files ==="
-          find "${{ env.RELEASE_DIR }}" -name "*OVMF*" -type f || echo "No OVMF files found"
-      
-      - name: Create artifact archive
-        run: |
-          # Create a tarball of the release directory
-          tar -czf snp-release-${{ env.BUILD_DATE }}.tar.gz "${{ env.RELEASE_DIR }}"
-          
-          # Show the archive size
-          ls -lh snp-release-${{ env.BUILD_DATE }}.tar.gz
-          
-          # Calculate checksums
-          sha256sum snp-release-${{ env.BUILD_DATE }}.tar.gz > snp-release-${{ env.BUILD_DATE }}.tar.gz.sha256
-          md5sum snp-release-${{ env.BUILD_DATE }}.tar.gz > snp-release-${{ env.BUILD_DATE }}.tar.gz.md5
-      
-      - name: Upload build artifacts
+          # Extract and run only OVMF build from build.sh
+          source common.sh
+          build_ovmf
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Upload OVMF artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: snp-release-${{ env.BUILD_DATE }}
+          name: ovmf-build-${{ steps.versions.outputs.BUILD_DATE }}
+          path: |
+            usr/local/share/qemu/OVMF*.fd
+            ovmf/Build/OvmfX64/RELEASE_GCC5/FV/OVMF*.fd
+          retention-days: 7
+          if-no-files-found: warn
+
+  # ============================================================
+  # Stage 3: Build QEMU - ~30-45 min
+  # ============================================================
+  build-qemu:
+    needs: prepare-dependencies
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    if: ${{ !contains(inputs.skip_stages, 'qemu') }}
+    outputs:
+      qemu-built: ${{ steps.build.outputs.success }}
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h
+
+      - name: Resolve versions
+        id: versions
+        run: |
+          echo "AMDSEV_BRANCH=${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Checkout AMDSEV
+        uses: actions/checkout@v4
+        with:
+          repository: AMDESE/AMDSEV
+          ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
+          fetch-depth: 1
+
+      - name: Restore dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /var/cache/apt
+            /var/lib/apt/lists
+          key: ${{ needs.prepare-dependencies.outputs.cache-key }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y build-essential git ninja-build meson \
+            pkg-config libglib2.0-dev libpixman-1-dev ccache
+
+      - name: Setup ccache
+        run: |
+          mkdir -p ${{ env.CCACHE_DIR }}
+          ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
+          ccache -z
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-qemu-${{ steps.versions.outputs.AMDSEV_BRANCH }}-${{ github.sha }}
+          restore-keys: |
+            ccache-qemu-${{ steps.versions.outputs.AMDSEV_BRANCH }}-
+            ccache-qemu-
+
+      - name: Cache QEMU source
+        id: cache-qemu-src
+        uses: actions/cache@v4
+        with:
+          path: qemu/
+          key: qemu-src-${{ steps.versions.outputs.AMDSEV_BRANCH }}-${{ hashFiles('**/stable-commits') }}
+          restore-keys: |
+            qemu-src-${{ steps.versions.outputs.AMDSEV_BRANCH }}-
+
+      - name: Build QEMU
+        id: build
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          
+          # Extract and run only QEMU build from build.sh
+          source common.sh
+          build_qemu
+          
+          ccache -s
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Upload QEMU artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-build-${{ steps.versions.outputs.BUILD_DATE }}
+          path: |
+            usr/local/bin/qemu-*
+            usr/local/share/qemu/
+          retention-days: 7
+          if-no-files-found: warn
+
+  # ============================================================
+  # Stage 4: Build Host Kernel - ~60-90 min
+  # ============================================================
+  build-host-kernel:
+    needs: prepare-dependencies
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    if: ${{ !contains(inputs.skip_stages, 'host-kernel') }}
+    outputs:
+      kernel-built: ${{ steps.build.outputs.success }}
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h
+
+      - name: Resolve versions
+        id: versions
+        run: |
+          echo "AMDSEV_BRANCH=${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Checkout AMDSEV
+        uses: actions/checkout@v4
+        with:
+          repository: AMDESE/AMDSEV
+          ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
+          fetch-depth: 1
+
+      - name: Restore dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /var/cache/apt
+            /var/lib/apt/lists
+          key: ${{ needs.prepare-dependencies.outputs.cache-key }}
+
+      - name: Install kernel build dependencies
+        run: |
+          sudo apt-get install -y build-essential git libssl-dev libelf-dev \
+            flex bison bc dpkg-dev debhelper dwarves ccache rsync
+
+      - name: Setup ccache
+        run: |
+          mkdir -p ${{ env.CCACHE_DIR }}
+          ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
+          ccache -z
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-host-kernel-${{ steps.versions.outputs.AMDSEV_BRANCH }}-${{ github.sha }}
+          restore-keys: |
+            ccache-host-kernel-${{ steps.versions.outputs.AMDSEV_BRANCH }}-
+            ccache-host-kernel-
+
+      - name: Cache kernel source
+        id: cache-kernel-src
+        uses: actions/cache@v4
+        with:
+          path: linux/
+          key: kernel-src-host-${{ steps.versions.outputs.AMDSEV_BRANCH }}-${{ hashFiles('**/stable-commits') }}
+          restore-keys: |
+            kernel-src-host-${{ steps.versions.outputs.AMDSEV_BRANCH }}-
+
+      - name: Build Host Kernel
+        id: build
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          export CC="ccache gcc"
+          
+          # Extract and run only host kernel build from build.sh
+          source common.sh
+          SRC_BUILD_DIR="$(pwd)/linux-host"
+          LINUX_BUILD_DIR="${SRC_BUILD_DIR}"
+          DEST_DIR="$(pwd)/snp-release-$(date +%Y-%m-%d)"
+          
+          build_kernel_host
+          
+          ccache -s
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: List built packages
+        run: |
+          echo "=== Host Kernel Packages ==="
+          find . -name "*.deb" -o -name "*.rpm" | grep -i linux | grep -i host || true
+
+      - name: Upload host kernel packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-kernel-${{ steps.versions.outputs.BUILD_DATE }}
+          path: |
+            snp-release-*/linux/host/*.deb
+            snp-release-*/linux/host/*.rpm
+          retention-days: 7
+          if-no-files-found: warn
+
+  # ============================================================
+  # Stage 5: Build Guest Kernel - ~60-90 min
+  # ============================================================
+  build-guest-kernel:
+    needs: prepare-dependencies
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    if: ${{ !contains(inputs.skip_stages, 'guest-kernel') }}
+    outputs:
+      kernel-built: ${{ steps.build.outputs.success }}
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h
+
+      - name: Resolve versions
+        id: versions
+        run: |
+          echo "AMDSEV_BRANCH=${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Checkout AMDSEV
+        uses: actions/checkout@v4
+        with:
+          repository: AMDESE/AMDSEV
+          ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
+          fetch-depth: 1
+
+      - name: Restore dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /var/cache/apt
+            /var/lib/apt/lists
+          key: ${{ needs.prepare-dependencies.outputs.cache-key }}
+
+      - name: Install kernel build dependencies
+        run: |
+          sudo apt-get install -y build-essential git libssl-dev libelf-dev \
+            flex bison bc dpkg-dev debhelper dwarves ccache rsync
+
+      - name: Setup ccache
+        run: |
+          mkdir -p ${{ env.CCACHE_DIR }}
+          ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
+          ccache -z
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-guest-kernel-${{ steps.versions.outputs.AMDSEV_BRANCH }}-${{ github.sha }}
+          restore-keys: |
+            ccache-guest-kernel-${{ steps.versions.outputs.AMDSEV_BRANCH }}-
+            ccache-guest-kernel-
+
+      - name: Cache kernel source
+        id: cache-kernel-src
+        uses: actions/cache@v4
+        with:
+          path: linux/
+          key: kernel-src-guest-${{ steps.versions.outputs.AMDSEV_BRANCH }}-${{ hashFiles('**/stable-commits') }}
+          restore-keys: |
+            kernel-src-guest-${{ steps.versions.outputs.AMDSEV_BRANCH }}-
+
+      - name: Build Guest Kernel
+        id: build
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          export CC="ccache gcc"
+          
+          # Extract and run only guest kernel build from build.sh
+          source common.sh
+          SRC_BUILD_DIR="$(pwd)/linux-guest"
+          LINUX_BUILD_DIR="${SRC_BUILD_DIR}"
+          DEST_DIR="$(pwd)/snp-release-$(date +%Y-%m-%d)"
+          
+          build_kernel_guest
+          
+          ccache -s
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: List built packages
+        run: |
+          echo "=== Guest Kernel Packages ==="
+          find . -name "*.deb" -o -name "*.rpm" | grep -i linux | grep -i guest || true
+
+      - name: Upload guest kernel packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-kernel-${{ steps.versions.outputs.BUILD_DATE }}
+          path: |
+            snp-release-*/linux/guest/*.deb
+            snp-release-*/linux/guest/*.rpm
+          retention-days: 7
+          if-no-files-found: warn
+
+  # ============================================================
+  # Stage 6: Package & Release
+  # ============================================================
+  package-and-release:
+    needs: [build-ovmf, build-qemu, build-host-kernel, build-guest-kernel]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    if: always() && (needs.build-ovmf.result == 'success' || needs.build-qemu.result == 'success' || needs.build-host-kernel.result == 'success' || needs.build-guest-kernel.result == 'success')
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Resolve versions
+        id: versions
+        run: |
+          echo "BUILD_DATE=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          echo "AMDSEV_BRANCH=${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}" >> $GITHUB_OUTPUT
+
+      - name: Checkout AMDSEV (for scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: AMDESE/AMDSEV
+          ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
+          fetch-depth: 1
+
+      - name: Create release directory structure
+        run: |
+          RELEASE_DIR="snp-release-${{ steps.versions.outputs.BUILD_DATE }}"
+          mkdir -p "${RELEASE_DIR}"/{linux/{host,guest},usr/local/{bin,share/qemu}}
+          echo "RELEASE_DIR=${RELEASE_DIR}" >> $GITHUB_ENV
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Organize artifacts
+        run: |
+          set -x
+          # Copy OVMF
+          if [ -d "artifacts/ovmf-build-${{ steps.versions.outputs.BUILD_DATE }}" ]; then
+            cp -r artifacts/ovmf-build-${{ steps.versions.outputs.BUILD_DATE }}/* "${{ env.RELEASE_DIR }}/" || true
+          fi
+          
+          # Copy QEMU
+          if [ -d "artifacts/qemu-build-${{ steps.versions.outputs.BUILD_DATE }}" ]; then
+            cp -r artifacts/qemu-build-${{ steps.versions.outputs.BUILD_DATE }}/* "${{ env.RELEASE_DIR }}/" || true
+          fi
+          
+          # Copy host kernel
+          if [ -d "artifacts/host-kernel-${{ steps.versions.outputs.BUILD_DATE }}" ]; then
+            mkdir -p "${{ env.RELEASE_DIR }}/linux/host"
+            find artifacts/host-kernel-${{ steps.versions.outputs.BUILD_DATE }} -type f \( -name "*.deb" -o -name "*.rpm" \) \
+              -exec cp {} "${{ env.RELEASE_DIR }}/linux/host/" \; || true
+          fi
+          
+          # Copy guest kernel
+          if [ -d "artifacts/guest-kernel-${{ steps.versions.outputs.BUILD_DATE }}" ]; then
+            mkdir -p "${{ env.RELEASE_DIR }}/linux/guest"
+            find artifacts/guest-kernel-${{ steps.versions.outputs.BUILD_DATE }} -type f \( -name "*.deb" -o -name "*.rpm" \) \
+              -exec cp {} "${{ env.RELEASE_DIR }}/linux/guest/" \; || true
+          fi
+          
+          # Copy scripts
+          cp -f install.sh launch-qemu.sh kvm.conf "${{ env.RELEASE_DIR }}/" || true
+          
+          echo "=== Release Directory Contents ==="
+          ls -lah "${{ env.RELEASE_DIR }}/"
+          find "${{ env.RELEASE_DIR }}" -type f | head -50
+
+      - name: Create release tarball
+        run: |
+          tar -czf snp-release-${{ steps.versions.outputs.BUILD_DATE }}.tar.gz "${{ env.RELEASE_DIR }}"
+          sha256sum snp-release-${{ steps.versions.outputs.BUILD_DATE }}.tar.gz > snp-release-${{ steps.versions.outputs.BUILD_DATE }}.tar.gz.sha256
+          md5sum snp-release-${{ steps.versions.outputs.BUILD_DATE }}.tar.gz > snp-release-${{ steps.versions.outputs.BUILD_DATE }}.tar.gz.md5
+          ls -lh snp-release-${{ steps.versions.outputs.BUILD_DATE }}.tar.gz*
+
+      - name: Upload complete release
+        uses: actions/upload-artifact@v4
+        with:
+          name: snp-release-complete-${{ steps.versions.outputs.BUILD_DATE }}
           path: |
             snp-release-*.tar.gz
             snp-release-*.tar.gz.sha256
             snp-release-*.tar.gz.md5
           retention-days: 90
-          compression-level: 0  # Already compressed as tar.gz
-      
-      - name: Upload kernel packages separately
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-packages-${{ env.BUILD_DATE }}
-          path: |
-            ${{ env.RELEASE_DIR }}/linux/host/*.deb
-            ${{ env.RELEASE_DIR }}/linux/guest/*.deb
-          retention-days: 90
-          if-no-files-found: warn
-      
+
       - name: Generate build summary
         run: |
-          echo "# AMD SEV-SNP Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
-          echo "- **Date**: ${{ env.BUILD_DATE }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch**: snp-latest" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Build Output" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          ls -lh "${{ env.RELEASE_DIR }}/" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "- Complete release: \`snp-release-${{ env.BUILD_DATE }}.tar.gz\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Kernel packages available in separate artifact" >> $GITHUB_STEP_SUMMARY
-      
-      - name: Create Release (on tag or manual trigger)
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          # AMD SEV-SNP Multi-Stage Build Summary
+          
+          ## Build Information
+          - **Date**: ${{ steps.versions.outputs.BUILD_DATE }}
+          - **Branch**: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
+          - **Commit**: $(cd /tmp && git ls-remote https://github.com/AMDESE/AMDSEV.git refs/heads/${{ steps.versions.outputs.AMDSEV_BRANCH }} | cut -f1)
+          
+          ## Build Stages Status
+          - **OVMF**: ${{ needs.build-ovmf.result }}
+          - **QEMU**: ${{ needs.build-qemu.result }}
+          - **Host Kernel**: ${{ needs.build-host-kernel.result }}
+          - **Guest Kernel**: ${{ needs.build-guest-kernel.result }}
+          
+          ## Artifacts
+          - Complete release: \`snp-release-${{ steps.versions.outputs.BUILD_DATE }}.tar.gz\`
+          - Individual components available as separate artifacts
+          
+          ## Cache Keys Used
+          - OVMF: Cached for faster rebuilds
+          - QEMU: Using ccache (up to 5GB)
+          - Kernels: Using ccache (up to 5GB each)
+          EOF
+
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v1
         with:
           files: |
             snp-release-*.tar.gz
             snp-release-*.tar.gz.sha256
             snp-release-*.tar.gz.md5
-          tag_name: ${{ github.ref_name != 'snp-latest' && github.ref_name || format('build-{0}', env.BUILD_DATE) }}
-          name: AMD SEV-SNP Build ${{ env.BUILD_DATE }}
+          tag_name: build-${{ steps.versions.outputs.BUILD_DATE }}-${{ github.run_number }}
+          name: AMD SEV-SNP Build ${{ steps.versions.outputs.BUILD_DATE }}
           body: |
-            # AMD SEV-SNP Build
+            # AMD SEV-SNP Multi-Stage Build
             
-            Automated build of the AMDSEV snp-latest branch.
+            **Branch**: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
+            **Build Date**: ${{ steps.versions.outputs.BUILD_DATE }}
+            **Run**: ${{ github.run_number }}
             
-            ## Contents
-            - Host and Guest Linux kernels with SNP support
-            - QEMU with SNP support
-            - OVMF BIOS with SNP support
-            - Installation and launch scripts
+            ## Build Status
+            - OVMF: ${{ needs.build-ovmf.result }}
+            - QEMU: ${{ needs.build-qemu.result }}
+            - Host Kernel: ${{ needs.build-host-kernel.result }}
+            - Guest Kernel: ${{ needs.build-guest-kernel.result }}
             
             ## Installation
             ```bash
-            tar -xzf snp-release-${{ env.BUILD_DATE }}.tar.gz
+            tar -xzf snp-release-${{ steps.versions.outputs.BUILD_DATE }}.tar.gz
             cd snp-release-*/
             sudo ./install.sh
             ```
-            
-            ## Verification
-            ```bash
-            # Verify checksums
-            sha256sum -c snp-release-${{ env.BUILD_DATE }}.tar.gz.sha256
-            ```
-            
-            Built on: ${{ env.BUILD_DATE }}
-            Commit: ${{ github.sha }}
           draft: false
           prerelease: false
         env:

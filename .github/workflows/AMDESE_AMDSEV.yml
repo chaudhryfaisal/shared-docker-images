@@ -22,66 +22,18 @@ env:
 
 jobs:
   # ============================================================
-  # Stage 1: Dependency Installation & Caching
+  # Stage 1: Setup (placeholder for future optimizations)
   # ============================================================
   prepare-dependencies:
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 5
     outputs:
-      cache-key: ${{ steps.cache-deps.outputs.cache-primary-key }}
+      cache-key: ${{ steps.gen-key.outputs.key }}
     steps:
-      - name: Maximize build space
+      - name: Generate cache key
+        id: gen-key
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          df -h
-
-      - name: Resolve build versions
-        id: versions
-        run: |
-          AMDSEV_BRANCH="${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}"
-          echo "AMDSEV_BRANCH=${AMDSEV_BRANCH}" >> $GITHUB_OUTPUT
-          echo "BUILD_DATE=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
-
-      - name: Checkout AMDSEV repository
-        uses: actions/checkout@v4
-        with:
-          repository: AMDESE/AMDSEV
-          ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
-          fetch-depth: 1
-
-      - name: Cache dependencies
-        id: cache-deps
-        uses: actions/cache@v4
-        with:
-          path: |
-            /var/cache/apt
-            /var/lib/apt/lists
-          key: deps-ubuntu-22.04-${{ hashFiles('**/build.sh', '**/common.sh') }}
-          restore-keys: |
-            deps-ubuntu-22.04-
-
-      - name: Install build dependencies
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential git libssl-dev libelf-dev flex bison bc \
-            python3 python3-pip ninja-build meson pkg-config \
-            libglib2.0-dev libpixman-1-dev iasl nasm uuid-dev \
-            acpica-tools libuuid1 libncurses5-dev wget curl rsync \
-            dpkg-dev debhelper dwarves gcc g++ make autoconf automake \
-            libtool ccache
-
-      - name: Setup ccache
-        run: |
-          mkdir -p ${{ env.CCACHE_DIR }}
-          ccache --set-config=max_size=${{ env.CCACHE_MAXSIZE }}
-          ccache --set-config=compression=true
-          ccache -z
+          echo "key=deps-ubuntu-22.04-$(date +%Y%m%d)" >> $GITHUB_OUTPUT
 
   # ============================================================
   # Stage 2: Build OVMF (UEFI Firmware) - ~15-30 min
@@ -112,16 +64,9 @@ jobs:
           ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
           fetch-depth: 1
 
-      - name: Restore dependency cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            /var/cache/apt
-            /var/lib/apt/lists
-          key: ${{ needs.prepare-dependencies.outputs.cache-key }}
-
       - name: Install dependencies
         run: |
+          sudo apt-get update
           sudo apt-get install -y iasl nasm uuid-dev acpica-tools \
             python3 python3-pip build-essential git
 
@@ -193,16 +138,9 @@ jobs:
           ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
           fetch-depth: 1
 
-      - name: Restore dependency cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            /var/cache/apt
-            /var/lib/apt/lists
-          key: ${{ needs.prepare-dependencies.outputs.cache-key }}
-
       - name: Install dependencies
         run: |
+          sudo apt-get update
           sudo apt-get install -y build-essential git ninja-build meson \
             pkg-config libglib2.0-dev libpixman-1-dev ccache
 
@@ -283,16 +221,9 @@ jobs:
           ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
           fetch-depth: 1
 
-      - name: Restore dependency cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            /var/cache/apt
-            /var/lib/apt/lists
-          key: ${{ needs.prepare-dependencies.outputs.cache-key }}
-
       - name: Install kernel build dependencies
         run: |
+          sudo apt-get update
           sudo apt-get install -y build-essential git libssl-dev libelf-dev \
             flex bison bc dpkg-dev debhelper dwarves ccache rsync
 
@@ -381,16 +312,9 @@ jobs:
           ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
           fetch-depth: 1
 
-      - name: Restore dependency cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            /var/cache/apt
-            /var/lib/apt/lists
-          key: ${{ needs.prepare-dependencies.outputs.cache-key }}
-
       - name: Install kernel build dependencies
         run: |
+          sudo apt-get update
           sudo apt-get install -y build-essential git libssl-dev libelf-dev \
             flex bison bc dpkg-dev debhelper dwarves ccache rsync
 

@@ -5,7 +5,7 @@ on:
       - AMDESE_AMDSEV
   workflow_dispatch:
     inputs:
-      AMDESE_AMDSEV:
+      AMDSEV_BRANCH:
         description: "Override AMDSEV  Branch (optional)"
         required: false
 env:
@@ -19,6 +19,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 360  # 6 hours max build time
     permissions:
       contents: read
       packages: write
@@ -30,8 +31,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          AMDESE_AMDSEV="${{ inputs.AMDESE_AMDSEV || env.AMDESE_AMDSEV }}"
-          echo "AMDESE_AMDSEV=${AMDESE_AMDSEV}" >> "$GITHUB_OUTPUT"
+          AMDSEV_BRANCH="${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}"
+          echo "AMDSEV_BRANCH=${AMDSEV_BRANCH}" | tee -a "$GITHUB_OUTPUT"
 
       - name: Maximize build space
         run: |
@@ -45,7 +46,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.versions.outputs.AMDESE_AMDSEV }}
+          repository: AMDESE/AMDSEV
+          ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
+          fetch-depth: 1
       
       - name: Install build dependencies
         run: |

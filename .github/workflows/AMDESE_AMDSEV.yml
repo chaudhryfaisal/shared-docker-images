@@ -62,7 +62,11 @@ jobs:
             libglib2.0-dev libpixman-1-dev iasl nasm uuid-dev \
             acpica-tools libuuid1 libncurses5-dev wget curl rsync \
             dpkg-dev debhelper dwarves gcc g++ make autoconf automake \
-            libtool ccache
+            libtool ccache \
+            libdw-dev libdw1 libunwind-dev libslang2-dev \
+            libnuma-dev libaudit-dev libbabeltrace-dev \
+            libiberty-dev libperl-dev python3-dev \
+            liblzma-dev libzstd-dev libcap-dev
 
       - name: Setup ccache
         run: |

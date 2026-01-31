@@ -1,0 +1,229 @@
+name: AMDESE_AMDSEV_v1
+on:
+  push:
+    branches:
+      - AMDESE_AMDSEV
+  workflow_dispatch:
+    inputs:
+      AMDSEV_BRANCH:
+        description: "Override AMDSEV  Branch (optional)"
+        required: false
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+  # ---- SINGLE SOURCE OF TRUTH ----
+  AMDSEV_BRANCH: "snp-latest"
+  # --------------------------------
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360  # 6 hours max build time
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Resolve build versions
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          AMDSEV_BRANCH="${{ inputs.AMDSEV_BRANCH || env.AMDSEV_BRANCH }}"
+          echo "AMDSEV_BRANCH=${AMDSEV_BRANCH}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+      
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: AMDESE/AMDSEV
+          ref: ${{ steps.versions.outputs.AMDSEV_BRANCH }}
+          fetch-depth: 1
+      
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            libssl-dev \
+            libelf-dev \
+            flex \
+            bison \
+            bc \
+            python3 \
+            python3-pip \
+            ninja-build \
+            meson \
+            pkg-config \
+            libglib2.0-dev \
+            libpixman-1-dev \
+            iasl \
+            nasm \
+            uuid-dev \
+            acpica-tools \
+            libuuid1 \
+            libncurses5-dev \
+            wget \
+            curl \
+            rsync \
+            dpkg-dev \
+            debhelper \
+            dwarves \
+            gcc \
+            g++ \
+            make \
+            autoconf \
+            automake \
+            libtool \
+            libdw-dev libdw1 libunwind-dev libslang2-dev \
+            libnuma-dev libaudit-dev libbabeltrace-dev \
+            libiberty-dev libperl-dev python3-dev \
+            liblzma-dev libzstd-dev libcap-dev
+      
+      - name: Display system information
+        run: |
+          echo "=== System Information ==="
+          uname -a
+          df -h
+          free -h
+          nproc
+          gcc --version
+      
+      - name: Build SNP packages
+        run: |
+          # Set build date for consistent directory naming
+          export BUILD_DATE=$(date +%Y-%m-%d)
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+          
+          # Run the build script with package option
+          ./build.sh --package
+          
+          # Find the created release directory
+          RELEASE_DIR=$(ls -d snp-release-* | head -n 1)
+          echo "RELEASE_DIR=$RELEASE_DIR" >> $GITHUB_ENV
+          
+          # Display what was built
+          echo "=== Build completed. Contents of $RELEASE_DIR: ==="
+          ls -lah "$RELEASE_DIR/"
+          
+          # Show size of the release directory
+          du -sh "$RELEASE_DIR"
+      
+      - name: List kernel packages
+        run: |
+          echo "=== Host Kernel Packages ==="
+          ls -lh "${{ env.RELEASE_DIR }}/linux/host/" || echo "No host packages found"
+          
+          echo "=== Guest Kernel Packages ==="
+          ls -lh "${{ env.RELEASE_DIR }}/linux/guest/" || echo "No guest packages found"
+      
+      - name: List QEMU and OVMF binaries
+        run: |
+          echo "=== QEMU Binaries ==="
+          find "${{ env.RELEASE_DIR }}" -name "*qemu*" -type f || echo "No QEMU binaries found"
+          
+          echo "=== OVMF Files ==="
+          find "${{ env.RELEASE_DIR }}" -name "*OVMF*" -type f || echo "No OVMF files found"
+      
+      - name: Create artifact archive
+        run: |
+          # Create a tarball of the release directory
+          tar -czf snp-release-${{ env.BUILD_DATE }}.tar.gz "${{ env.RELEASE_DIR }}"
+          
+          # Show the archive size
+          ls -lh snp-release-${{ env.BUILD_DATE }}.tar.gz
+          
+          # Calculate checksums
+          sha256sum snp-release-${{ env.BUILD_DATE }}.tar.gz > snp-release-${{ env.BUILD_DATE }}.tar.gz.sha256
+          md5sum snp-release-${{ env.BUILD_DATE }}.tar.gz > snp-release-${{ env.BUILD_DATE }}.tar.gz.md5
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: snp-release-${{ env.BUILD_DATE }}
+          path: |
+            snp-release-*.tar.gz
+            snp-release-*.tar.gz.sha256
+            snp-release-*.tar.gz.md5
+          retention-days: 90
+          compression-level: 0  # Already compressed as tar.gz
+      
+      - name: Upload kernel packages separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-packages-${{ env.BUILD_DATE }}
+          path: |
+            ${{ env.RELEASE_DIR }}/linux/host/*.deb
+            ${{ env.RELEASE_DIR }}/linux/guest/*.deb
+          retention-days: 90
+          if-no-files-found: warn
+      
+      - name: Generate build summary
+        run: |
+          echo "# AMD SEV-SNP Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Date**: ${{ env.BUILD_DATE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: snp-latest" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Output" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -lh "${{ env.RELEASE_DIR }}/" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- Complete release: \`snp-release-${{ env.BUILD_DATE }}.tar.gz\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Kernel packages available in separate artifact" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Create Release (on tag or manual trigger)
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            snp-release-*.tar.gz
+            snp-release-*.tar.gz.sha256
+            snp-release-*.tar.gz.md5
+          tag_name: ${{ github.ref_name != 'snp-latest' && github.ref_name || format('build-{0}', env.BUILD_DATE) }}
+          name: AMD SEV-SNP Build ${{ env.BUILD_DATE }}
+          body: |
+            # AMD SEV-SNP Build
+            
+            Automated build of the AMDSEV snp-latest branch.
+            
+            ## Contents
+            - Host and Guest Linux kernels with SNP support
+            - QEMU with SNP support
+            - OVMF BIOS with SNP support
+            - Installation and launch scripts
+            
+            ## Installation
+            ```bash
+            tar -xzf snp-release-${{ env.BUILD_DATE }}.tar.gz
+            cd snp-release-*/
+            sudo ./install.sh
+            ```
+            
+            ## Verification
+            ```bash
+            # Verify checksums
+            sha256sum -c snp-release-${{ env.BUILD_DATE }}.tar.gz.sha256
+            ```
+            
+            Built on: ${{ env.BUILD_DATE }}
+            Commit: ${{ github.sha }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

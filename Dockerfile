@@ -24,15 +24,17 @@ RUN mkdir -p "${CONF_PATH}"
 RUN make -C BaseTools -j$(nproc)
 
 # ---- build SNP-capable OVMF ----
-RUN bash -c "source edksetup.sh && build -a X64 -t GCC5 -b RELEASE -p OvmfPkg/OvmfPkgX64.dsc"
+RUN bash -c "source edksetup.sh && build -n $(nproc) --arch X64 --tagname GCC5 -b RELEASE --platform OvmfPkg/AmdSev/AmdSevX64.dsc"
+
+RUN find /build/edk2/Build
 
 # ---- export firmware ----
 FROM debian:12-slim AS ovmf
 
 COPY --from=builder \
-  /build/edk2/Build/OvmfX64/RELEASE_GCC5/FV/OVMF_CODE.fd \
+  /build/edk2/Build/AmdSev/RELEASE_GCC5/FV/OVMF_CODE.fd \
   /output/OVMF_CODE.fd
 
 COPY --from=builder \
-  /build/edk2/Build/OvmfX64/RELEASE_GCC5/FV/OVMF_VARS.fd \
+  /build/edk2/Build/AmdSev/RELEASE_GCC5/FV/OVMF_VARS.fd \
   /output/OVMF_VARS.fd

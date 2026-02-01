@@ -1,7 +1,8 @@
 FROM debian:12-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ca-certificates git python3 python3-distutils python3-pip \
-    uuid-dev nasm acpica-tools iasl xz-utils flex bison curl wget \
+    uuid-dev nasm acpica-tools iasl xz-utils flex bison curl wget \    
+    grub-efi-amd64-bin grub-efi-amd64 grub-common \
     && rm -rf /var/lib/apt/lists/*
 ARG EDK2_BRANCH=edk2-stable202502
 RUN git clone --depth 1 --branch ${EDK2_BRANCH} \
@@ -24,7 +25,7 @@ RUN mkdir -p "${CONF_PATH}"
 RUN make -C BaseTools -j$(nproc)
 
 # ---- build SNP-capable OVMF ----
-RUN bash -c "source edksetup.sh && build -n $(nproc) --arch X64 --tagname GCC5 -b RELEASE --platform OvmfPkg/AmdSev/AmdSevX64.dsc"
+RUN bash -c "touch OvmfPkg/AmdSev/Grub/grub.efi && source edksetup.sh && build -n $(nproc) --arch X64 --tagname GCC5 -b RELEASE --platform OvmfPkg/AmdSev/AmdSevX64.dsc"
 
 RUN find /build/edk2/Build
 

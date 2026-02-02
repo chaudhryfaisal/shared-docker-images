@@ -1,0 +1,469 @@
+name: Build COCONUT-SVSM Components
+
+on:
+  # Manual trigger via GitHub UI or CLI
+  workflow_dispatch:
+    inputs:
+      build_host_kernel:
+        description: 'Build Host Kernel'
+        required: false
+        default: true
+        type: boolean
+      build_guest_kernel:
+        description: 'Build Guest Kernel'
+        required: false
+        default: true
+        type: boolean
+      build_edk2:
+        description: 'Build EDK2/OVMF'
+        required: false
+        default: true
+        type: boolean
+      build_qemu:
+        description: 'Build QEMU'
+        required: false
+        default: true
+        type: boolean
+      build_svsm:
+        description: 'Build SVSM'
+        required: false
+        default: true
+        type: boolean
+  
+  # Trigger on push to specific branch (customize as needed)
+  push:
+    branches:
+      - coconut-svsm
+    paths:
+      - 'dockerfiles/**'
+      - '.github/workflows/build.yml'
+      - 'Makefile'
+env:
+  DOCKER_BUILDKIT: 1
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/svsm
+
+# Cancel in-progress runs for the same workflow
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job 1: Build Linux Host Kernel
+  build-host-kernel:
+    name: Build Host Kernel
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.build_host_kernel == 'true') ||
+      github.event_name != 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+      
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-host-kernel
+          key: ${{ runner.os }}-buildx-host-kernel-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-host-kernel-
+      
+      - name: Build Host Kernel
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./dockerfiles/Dockerfile.host-kernel
+          push: false
+          tags: svsm-host-kernel:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-host-kernel
+          cache-to: type=local,dest=/tmp/.buildx-cache-host-kernel-new,mode=max
+          outputs: type=local,dest=./artifacts/host-kernel
+      
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache-host-kernel
+          mv /tmp/.buildx-cache-host-kernel-new /tmp/.buildx-cache-host-kernel || true
+      
+      - name: Upload Host Kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-kernel
+          path: ./artifacts/host-kernel/*
+          retention-days: 30
+          if-no-files-found: error
+      
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-kernel-build-logs
+          path: |
+            /tmp/*.log
+            ~/.docker/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Job 2: Build Linux Guest Kernel
+  build-guest-kernel:
+    name: Build Guest Kernel
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.build_guest_kernel == 'true') ||
+      github.event_name != 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+      
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-guest-kernel
+          key: ${{ runner.os }}-buildx-guest-kernel-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-guest-kernel-
+      
+      - name: Build Guest Kernel
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./dockerfiles/Dockerfile.guest-kernel
+          push: false
+          tags: svsm-guest-kernel:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-guest-kernel
+          cache-to: type=local,dest=/tmp/.buildx-cache-guest-kernel-new,mode=max
+          outputs: type=local,dest=./artifacts/guest-kernel
+      
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache-guest-kernel
+          mv /tmp/.buildx-cache-guest-kernel-new /tmp/.buildx-cache-guest-kernel || true
+      
+      - name: Upload Guest Kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-kernel
+          path: ./artifacts/guest-kernel/*
+          retention-days: 30
+          if-no-files-found: error
+      
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-kernel-build-logs
+          path: |
+            /tmp/*.log
+            ~/.docker/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Job 3: Build EDK2/OVMF Firmware
+  build-edk2:
+    name: Build EDK2/OVMF
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.build_edk2 == 'true') ||
+      github.event_name != 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+      
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-edk2
+          key: ${{ runner.os }}-buildx-edk2-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-edk2-
+      
+      - name: Build EDK2/OVMF
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./dockerfiles/Dockerfile.edk2
+          push: false
+          tags: svsm-edk2:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-edk2
+          cache-to: type=local,dest=/tmp/.buildx-cache-edk2-new,mode=max
+          outputs: type=local,dest=./artifacts/edk2
+      
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache-edk2
+          mv /tmp/.buildx-cache-edk2-new /tmp/.buildx-cache-edk2 || true
+      
+      - name: Upload EDK2 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: edk2
+          path: ./artifacts/edk2/*
+          retention-days: 30
+          if-no-files-found: error
+      
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edk2-build-logs
+          path: |
+            /tmp/*.log
+            ~/.docker/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Job 4: Build QEMU with IGVM support
+  build-qemu:
+    name: Build QEMU
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.build_qemu == 'true') ||
+      github.event_name != 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+      
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-qemu
+          key: ${{ runner.os }}-buildx-qemu-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-qemu-
+      
+      - name: Build QEMU
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./dockerfiles/Dockerfile.qemu
+          push: false
+          tags: svsm-qemu:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-qemu
+          cache-to: type=local,dest=/tmp/.buildx-cache-qemu-new,mode=max
+          outputs: type=local,dest=./artifacts/qemu
+      
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache-qemu
+          mv /tmp/.buildx-cache-qemu-new /tmp/.buildx-cache-qemu || true
+      
+      - name: Verify static build
+        run: |
+          chmod +x ./artifacts/qemu/qemu-system-x86_64
+          file ./artifacts/qemu/qemu-system-x86_64
+          ldd ./artifacts/qemu/qemu-system-x86_64 || echo "Static binary confirmed"
+      
+      - name: Upload QEMU artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu
+          path: ./artifacts/qemu/*
+          retention-days: 30
+          if-no-files-found: error
+      
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-build-logs
+          path: |
+            /tmp/*.log
+            ~/.docker/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Job 5: Build COCONUT-SVSM
+  build-svsm:
+    name: Build COCONUT-SVSM
+    runs-on: ubuntu-latest
+    needs: [build-edk2]  # SVSM build requires EDK2 firmware
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.build_svsm == 'true') ||
+      github.event_name != 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+      
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache-svsm
+          key: ${{ runner.os }}-buildx-svsm-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-svsm-
+      
+      - name: Build COCONUT-SVSM
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./dockerfiles/Dockerfile.svsm
+          push: false
+          tags: svsm:latest
+          cache-from: type=local,src=/tmp/.buildx-cache-svsm
+          cache-to: type=local,dest=/tmp/.buildx-cache-svsm-new,mode=max
+          outputs: type=local,dest=./artifacts/svsm
+      
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache-svsm
+          mv /tmp/.buildx-cache-svsm-new /tmp/.buildx-cache-svsm || true
+      
+      - name: Upload SVSM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: svsm
+          path: ./artifacts/svsm/*
+          retention-days: 30
+          if-no-files-found: error
+      
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: svsm-build-logs
+          path: |
+            /tmp/*.log
+            ~/.docker/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Job 6: Create combined release artifact
+  create-release:
+    name: Create Release Package
+    runs-on: ubuntu-latest
+    needs: [build-host-kernel, build-guest-kernel, build-edk2, build-qemu, build-svsm]
+    if: |
+      always() &&
+      (needs.build-host-kernel.result == 'success' || needs.build-host-kernel.result == 'skipped') &&
+      (needs.build-guest-kernel.result == 'success' || needs.build-guest-kernel.result == 'skipped') &&
+      (needs.build-edk2.result == 'success' || needs.build-edk2.result == 'skipped') &&
+      (needs.build-qemu.result == 'success' || needs.build-qemu.result == 'skipped') &&
+      (needs.build-svsm.result == 'success' || needs.build-svsm.result == 'skipped')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./all-artifacts
+      
+      - name: Create release structure
+        run: |
+          mkdir -p release-package
+          
+          # Copy artifacts if they exist
+          [ -d "./all-artifacts/host-kernel" ] && cp -r ./all-artifacts/host-kernel release-package/
+          [ -d "./all-artifacts/guest-kernel" ] && cp -r ./all-artifacts/guest-kernel release-package/
+          [ -d "./all-artifacts/edk2" ] && cp -r ./all-artifacts/edk2 release-package/
+          [ -d "./all-artifacts/qemu" ] && cp -r ./all-artifacts/qemu release-package/
+          [ -d "./all-artifacts/svsm" ] && cp -r ./all-artifacts/svsm release-package/
+          
+          # Create README
+          cat > release-package/README.txt << 'EOF'
+          COCONUT-SVSM Build Artifacts
+          ============================
+          
+          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          Git Commit: ${{ github.sha }}
+          Git Ref: ${{ github.ref }}
+          
+          Contents:
+          ---------
+          
+          host-kernel/    - Linux host kernel with SVSM support
+            - vmlinuz     - Kernel image
+            - System.map  - Symbol table
+            - config      - Kernel configuration
+          
+          guest-kernel/   - Linux guest kernel with SVSM support
+            - vmlinuz     - Kernel image
+            - System.map  - Symbol table
+            - config      - Kernel configuration
+          
+          edk2/           - EDK2/OVMF firmware with SVSM support
+            - OVMF.fd     - Firmware binary
+          
+          qemu/           - QEMU with IGVM support (statically compiled)
+            - qemu-system-x86_64  - QEMU binary
+            - qemu-img            - Disk image utility
+          
+          svsm/           - COCONUT-SVSM
+            - svsm.bin           - SVSM binary
+            - coconut-qemu.igvm  - IGVM package
+          
+          For usage instructions, see:
+          https://coconut-svsm.github.io/svsm/installation/INSTALL/
+          EOF
+          
+          # Create checksums
+          cd release-package
+          find . -type f -exec sha256sum {} \; > SHA256SUMS
+          cd ..
+          
+          # Create zip archive
+          zip -r coconut-svsm-build-${{ github.sha }}.zip release-package/
+      
+      - name: Upload combined release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: coconut-svsm-complete-${{ github.sha }}
+          path: coconut-svsm-build-${{ github.sha }}.zip
+          retention-days: 90
+          if-no-files-found: error
+      
+      - name: Generate build summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Build completed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Components Built" >> $GITHUB_STEP_SUMMARY
+          echo "- Host Kernel: ${{ needs.build-host-kernel.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Guest Kernel: ${{ needs.build-guest-kernel.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- EDK2/OVMF: ${{ needs.build-edk2.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- QEMU: ${{ needs.build-qemu.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- COCONUT-SVSM: ${{ needs.build-svsm.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "Download the complete build package from the artifacts section." >> $GITHUB_STEP_SUMMARY

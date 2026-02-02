@@ -1,0 +1,122 @@
+# Dockerfile for building QEMU with IGVM support (static build)
+# Multi-stage build for efficient caching
+
+FROM alpine:3.19 AS base
+
+# Install build dependencies for static QEMU build
+RUN apk add --no-cache \
+    build-base \
+    git \
+    python3 \
+    py3-pip \
+    ninja \
+    meson \
+    pkgconfig \
+    glib-dev \
+    glib-static \
+    pixman-dev \
+    pixman-static \
+    zlib-dev \
+    zlib-static \
+    libffi-dev \
+    perl \
+    bash \
+    linux-headers \
+    libcap-ng-dev \
+    libcap-ng-static \
+    libseccomp-dev \
+    libseccomp-static \
+    wget \
+    curl \
+    ca-certificates \
+    rust \
+    cargo \
+    cargo-c
+
+FROM base AS igvm-build
+
+WORKDIR /build
+
+# Build IGVM library (required for QEMU)
+RUN --mount=type=cache,target=/root/.cargo \
+    --mount=type=cache,target=/root/.git-cache \
+    git clone --depth 1 https://github.com/microsoft/igvm.git && \
+    cd igvm && \
+    DESTDIR=/usr/local make -f igvm_c/Makefile install
+
+FROM igvm-build AS qemu-source
+
+WORKDIR /build
+
+# Clone QEMU with SVSM/IGVM support
+RUN --mount=type=cache,target=/root/.git-cache \
+    git clone --depth 1 --branch svsm-igvm https://github.com/coconut-svsm/qemu.git || \
+    git clone --branch svsm-igvm https://github.com/coconut-svsm/qemu.git
+
+FROM qemu-source AS qemu-config
+
+WORKDIR /build/qemu
+
+# Configure QEMU for static build with IGVM support
+RUN PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/pkgconfig" \
+    ./configure \
+    --prefix=/usr/local \
+    --target-list=x86_64-softmmu \
+    --enable-igvm \
+    --static \
+    --disable-docs \
+    --disable-gtk \
+    --disable-sdl \
+    --disable-vnc \
+    --disable-curses \
+    --disable-virglrenderer \
+    --disable-vte \
+    --disable-brlapi \
+    --disable-libusb \
+    --disable-smartcard \
+    --disable-libnfs \
+    --disable-libiscsi \
+    --disable-rbd \
+    --disable-spice \
+    --disable-usb-redir \
+    --disable-opengl \
+    --disable-dmg \
+    --disable-vdi \
+    --disable-vvfat \
+    --disable-qcow1 \
+    --disable-parallels \
+    --disable-sheepdog \
+    --disable-guest-agent \
+    --disable-tpm \
+    --disable-live-block-migration \
+    --disable-numa \
+    --disable-replication \
+    --enable-kvm \
+    --enable-linux-aio \
+    --enable-attr
+
+FROM qemu-config AS qemu-build
+
+WORKDIR /build/qemu
+
+# Build QEMU statically
+RUN --mount=type=cache,target=/root/.cache \
+    ninja -C build && \
+    ninja -C build install
+
+# Verify static build
+RUN ldd /usr/local/bin/qemu-system-x86_64 2>&1 | grep -q "not a dynamic executable" || \
+    (echo "Warning: QEMU may not be fully static" && \
+     ldd /usr/local/bin/qemu-system-x86_64)
+
+FROM qemu-build AS output
+
+# Copy binaries to known location
+RUN mkdir -p /output && \
+    cp /usr/local/bin/qemu-system-x86_64 /output/ && \
+    cp /usr/local/bin/qemu-img /output/ && \
+    strip /output/qemu-system-x86_64 /output/qemu-img
+
+# Final stage with just the QEMU binaries
+FROM scratch AS export
+COPY --from=output /output/* /

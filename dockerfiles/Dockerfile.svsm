@@ -1,0 +1,122 @@
+# Dockerfile for building COCONUT-SVSM
+# Multi-stage build for efficient caching
+
+FROM ubuntu:22.04 AS base
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    curl \
+    wget \
+    ca-certificates \
+    binutils \
+    gcc \
+    g++ \
+    make \
+    pkg-config \
+    libssl-dev \
+    perl \
+    python3 \
+    cmake \
+    libclang-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM base AS rust-setup
+
+# Install Rust toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Add x86_64-unknown-none target for bare-metal compilation
+RUN rustup target add x86_64-unknown-none
+
+# Install cargo-xbuild for cross-compilation
+RUN cargo install cargo-xbuild
+
+FROM rust-setup AS svsm-source
+
+WORKDIR /build
+
+# Clone COCONUT-SVSM repository
+RUN --mount=type=cache,target=/root/.git-cache \
+    git clone --depth 1 --recurse-submodules https://github.com/coconut-svsm/svsm.git || \
+    (git clone https://github.com/coconut-svsm/svsm.git && \
+     cd svsm && \
+     git submodule update --init --recursive)
+
+FROM svsm-source AS edk2-firmware
+
+WORKDIR /build
+
+# We need the EDK2 firmware for SVSM build
+# Copy from EDK2 build or download pre-built
+# For now, we'll build a minimal version or expect it to be provided
+
+# Clone and build EDK2 (minimal for SVSM)
+RUN apt-get update && apt-get install -y \
+    uuid-dev \
+    iasl \
+    nasm \
+    acpica-tools \
+    python3-distutils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN --mount=type=cache,target=/root/.git-cache \
+    git clone --depth 1 --branch svsm --recurse-submodules https://github.com/coconut-svsm/edk2.git || \
+    (git clone --branch svsm https://github.com/coconut-svsm/edk2.git && \
+     cd edk2 && \
+     git submodule update --init --recursive)
+
+WORKDIR /build/edk2
+
+ENV PYTHON3_ENABLE=TRUE
+ENV PYTHON_COMMAND=python3
+
+RUN make -j$(nproc) -C BaseTools && \
+    bash -c "source ./edksetup.sh && \
+    build -p OvmfPkg/OvmfPkgX64.dsc \
+    -a X64 \
+    -b DEBUG \
+    -t GCC5 \
+    -D DEBUG_ON_SERIAL_PORT \
+    -D DEBUG_VERBOSE \
+    -D TPM2_ENABLE \
+    --pcd PcdUninstallMemAttrProtocol=TRUE \
+    -n $(nproc)"
+
+FROM edk2-firmware AS svsm-build
+
+WORKDIR /build/svsm
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV FW_FILE="/build/edk2/Build/OvmfX64/DEBUG_GCC5/FV/OVMF.fd"
+
+# Build COCONUT-SVSM
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/build/svsm/target \
+    cargo xbuild --release configs/qemu-target.json && \
+    mkdir -p /output && \
+    cp bin/svsm.bin /output/ && \
+    cp bin/coconut-qemu.igvm /output/
+
+# Run tests (optional, can be disabled for faster builds)
+# RUN --mount=type=cache,target=/root/.cargo/registry \
+#     --mount=type=cache,target=/root/.cargo/git \
+#     make test
+
+FROM svsm-build AS output
+
+# Copy artifacts to known location
+RUN mkdir -p /output && \
+    cp /build/svsm/bin/svsm.bin /output/ && \
+    cp /build/svsm/bin/coconut-qemu.igvm /output/
+
+# Final stage with just the SVSM binaries
+FROM scratch AS export
+COPY --from=output /output/* /

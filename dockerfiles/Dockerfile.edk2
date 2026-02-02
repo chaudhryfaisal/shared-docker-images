@@ -1,0 +1,79 @@
+# Dockerfile for building EDK2/OVMF firmware with SVSM support
+# Multi-stage build for efficient caching
+
+FROM ubuntu:22.04 AS base
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies for EDK2
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    uuid-dev \
+    iasl \
+    git \
+    gcc \
+    g++ \
+    make \
+    python3 \
+    python3-distutils \
+    nasm \
+    acpica-tools \
+    curl \
+    wget \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM base AS source
+
+WORKDIR /build
+
+# Clone EDK2 with SVSM support
+RUN --mount=type=cache,target=/root/.git-cache \
+    git clone --depth 1 --branch svsm --recurse-submodules https://github.com/coconut-svsm/edk2.git || \
+    (git clone --branch svsm https://github.com/coconut-svsm/edk2.git && \
+     cd edk2 && \
+     git submodule update --init --recursive)
+
+FROM source AS setup
+
+WORKDIR /build/edk2
+
+# Set Python environment variables
+ENV PYTHON3_ENABLE=TRUE
+ENV PYTHON_COMMAND=python3
+
+# Build EDK2 BaseTools
+RUN --mount=type=cache,target=/root/.cache \
+    make -j$(nproc) -C BaseTools
+
+# Setup EDK2 environment
+RUN bash -c "source ./edksetup.sh --reconfig"
+
+FROM setup AS build
+
+WORKDIR /build/edk2
+
+# Build OVMF with SVSM support
+RUN bash -c "source ./edksetup.sh && \
+    build -p OvmfPkg/OvmfPkgX64.dsc \
+    -a X64 \
+    -b DEBUG \
+    -t GCC5 \
+    -D DEBUG_ON_SERIAL_PORT \
+    -D DEBUG_VERBOSE \
+    -D TPM2_ENABLE \
+    --pcd PcdUninstallMemAttrProtocol=TRUE \
+    -n $(nproc)"
+
+FROM build AS output
+
+# Copy firmware to known location
+RUN mkdir -p /output && \
+    cp Build/OvmfX64/DEBUG_GCC5/FV/OVMF.fd /output/OVMF.fd && \
+    cp Build/OvmfX64/DEBUG_GCC5/FV/OVMF_CODE.fd /output/OVMF_CODE.fd 2>/dev/null || true && \
+    cp Build/OvmfX64/DEBUG_GCC5/FV/OVMF_VARS.fd /output/OVMF_VARS.fd 2>/dev/null || true
+
+# Final stage with just the firmware
+FROM scratch AS export
+COPY --from=output /output/* /

@@ -1,0 +1,26 @@
+# Build artifacts
+artifacts/
+*.zip
+*.igvm
+*.bin
+*.fd
+
+# Docker
+.docker/
+
+# Build logs
+*.log
+build.log
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+tmp/
+temp/
+.cache/

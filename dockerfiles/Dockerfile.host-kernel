@@ -1,0 +1,77 @@
+# Dockerfile for building Linux Host Kernel with SVSM support
+# Multi-stage build for efficient caching
+
+FROM ubuntu:22.04 AS base
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libncurses-dev \
+    bison \
+    flex \
+    libssl-dev \
+    libelf-dev \
+    bc \
+    kmod \
+    cpio \
+    rsync \
+    git \
+    wget \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM base AS source
+
+WORKDIR /build
+
+# Clone Linux kernel with SVSM support
+RUN --mount=type=cache,target=/root/.git-cache \
+    git clone --depth 1 --branch svsm https://github.com/coconut-svsm/linux.git || \
+    git clone --branch svsm https://github.com/coconut-svsm/linux.git
+
+FROM source AS config
+
+WORKDIR /build/linux
+
+# Generate kernel config based on minimal config
+RUN make defconfig && \
+    # Enable SEV-SNP support
+    ./scripts/config --enable CONFIG_KVM_AMD_SEV && \
+    ./scripts/config --enable CONFIG_AMD_MEM_ENCRYPT && \
+    ./scripts/config --enable CONFIG_CRYPTO_DEV_CCP_DD && \
+    ./scripts/config --enable CONFIG_CRYPTO_DEV_SP_PSP && \
+    # Enable required features for SVSM
+    ./scripts/config --enable CONFIG_X86_64 && \
+    ./scripts/config --enable CONFIG_KVM && \
+    ./scripts/config --enable CONFIG_VIRT_DRIVERS && \
+    ./scripts/config --enable CONFIG_MEMFD_CREATE && \
+    # Optimize build
+    ./scripts/config --disable CONFIG_DEBUG_INFO && \
+    ./scripts/config --disable CONFIG_DEBUG_INFO_BTF && \
+    # Apply config changes
+    make olddefconfig
+
+FROM config AS build
+
+WORKDIR /build/linux
+
+# Build kernel
+RUN --mount=type=cache,target=/root/.cache \
+    make -j$(nproc) bzImage && \
+    make -j$(nproc) modules
+
+FROM build AS output
+
+# Copy artifacts to known location
+RUN mkdir -p /output && \
+    cp arch/x86/boot/bzImage /output/vmlinuz && \
+    cp System.map /output/System.map && \
+    cp .config /output/config
+
+# Final stage with just the kernel
+FROM scratch AS export
+COPY --from=output /output/* /

@@ -37,12 +37,15 @@ FROM base AS igvm-build
 
 WORKDIR /build
 
+# Install cbindgen for IGVM library build
+RUN cargo install cbindgen --locked
+
 # Build IGVM library (required for QEMU)
-RUN --mount=type=cache,target=/root/.cargo \
+RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.git-cache \
     git clone --depth 1 https://github.com/microsoft/igvm.git && \
     cd igvm && \
-    DESTDIR=/usr/local make -f igvm_c/Makefile install
+    PATH="/root/.cargo/bin:$PATH" DESTDIR=/usr/local make -f igvm_c/Makefile install
 
 FROM igvm-build AS qemu-source
 
@@ -58,7 +61,10 @@ FROM qemu-source AS qemu-config
 WORKDIR /build/qemu
 
 # Configure QEMU for static build with IGVM support
+ENV PATH="/root/.cargo/bin:$PATH"
 RUN PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/pkgconfig" \
+    C_INCLUDE_PATH="/usr/local/include" \
+    LIBRARY_PATH="/usr/local/lib" \
     ./configure \
     --prefix=/usr/local \
     --target-list=x86_64-softmmu \

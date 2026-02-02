@@ -82,7 +82,7 @@ jobs:
           context: .
           file: ./dockerfiles/Dockerfile.host-kernel
           push: false
-          tags: svsm-host-kernel:latest
+          tags: svsm-host-kernellocal
           cache-from: type=local,src=/tmp/.buildx-cache-host-kernel
           cache-to: type=local,dest=/tmp/.buildx-cache-host-kernel-new,mode=max
           outputs: type=local,dest=./artifacts/host-kernel
@@ -144,7 +144,7 @@ jobs:
           context: .
           file: ./dockerfiles/Dockerfile.guest-kernel
           push: false
-          tags: svsm-guest-kernel:latest
+          tags: svsm-guest-kernellocal
           cache-from: type=local,src=/tmp/.buildx-cache-guest-kernel
           cache-to: type=local,dest=/tmp/.buildx-cache-guest-kernel-new,mode=max
           outputs: type=local,dest=./artifacts/guest-kernel
@@ -206,7 +206,7 @@ jobs:
           context: .
           file: ./dockerfiles/Dockerfile.edk2
           push: false
-          tags: svsm-edk2:latest
+          tags: svsm-edk2local
           cache-from: type=local,src=/tmp/.buildx-cache-edk2
           cache-to: type=local,dest=/tmp/.buildx-cache-edk2-new,mode=max
           outputs: type=local,dest=./artifacts/edk2
@@ -268,7 +268,7 @@ jobs:
           context: .
           file: ./dockerfiles/Dockerfile.qemu
           push: false
-          tags: svsm-qemu:latest
+          tags: svsm-qemulocal
           cache-from: type=local,src=/tmp/.buildx-cache-qemu
           cache-to: type=local,dest=/tmp/.buildx-cache-qemu-new,mode=max
           outputs: type=local,dest=./artifacts/qemu
@@ -337,7 +337,7 @@ jobs:
           context: .
           file: ./dockerfiles/Dockerfile.svsm
           push: false
-          tags: svsm:latest
+          tags: svsmlocal
           cache-from: type=local,src=/tmp/.buildx-cache-svsm
           cache-to: type=local,dest=/tmp/.buildx-cache-svsm-new,mode=max
           outputs: type=local,dest=./artifacts/svsm

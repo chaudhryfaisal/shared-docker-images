@@ -8,11 +8,11 @@ PROGRESS ?= plain
 DOCKER_BUILD = DOCKER_BUILDKIT=$(DOCKER_BUILDKIT) docker build --progress=$(PROGRESS)
 
 # Image tags
-TAG_HOST_KERNEL = svsm-host-kernel:latest
-TAG_GUEST_KERNEL = svsm-guest-kernel:latest
-TAG_EDK2 = svsm-edk2:latest
-TAG_QEMU = svsm-qemu:latest
-TAG_SVSM = svsm:latest
+TAG_HOST_KERNEL = svsm-host-kernel:local
+TAG_GUEST_KERNEL = svsm-guest-kernel:local
+TAG_EDK2 = svsm-edk2:local
+TAG_QEMU = svsm-qemu:local
+TAG_SVSM = svsm:local
 
 # Output directory
 ARTIFACTS_DIR = ./artifacts

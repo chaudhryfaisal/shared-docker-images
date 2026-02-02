@@ -28,15 +28,18 @@ RUN apk add --no-cache \
     libseccomp-static \
     wget \
     curl \
-    ca-certificates
+    ca-certificates \
+    openssl-libs-static \
+    libunwind-dev libunwind-static
 
-# Install Rust via rustup (to get latest version)
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain stable && \
-    . /root/.cargo/env && \
-    cargo install cargo-c cbindgen
+ARG RUST_VERSION=1.93.0
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION} --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
 
-ENV PATH="/root/.cargo/bin:$PATH"
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/cargo-target-install \
+    cargo install cargo-c cbindgen --target-dir /cargo-target-install
 
 FROM base AS igvm-build
 
@@ -45,9 +48,10 @@ WORKDIR /build
 # Build IGVM library (required for QEMU)
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.git-cache \
+    --mount=type=cache,target=/cargo-target-igvm \
     git clone --depth 1 https://github.com/microsoft/igvm.git && \
     cd igvm && \
-    DESTDIR=/usr/local make -f igvm_c/Makefile install
+    CARGO_TARGET_DIR=/cargo-target-igvm make -f igvm_c/Makefile install PREFIX=/usr/local INSTALL_SHARED=0
 
 FROM igvm-build AS qemu-source
 

@@ -29,8 +29,7 @@ FROM base AS source
 WORKDIR /build
 
 # Clone EDK2 with SVSM support
-RUN --mount=type=cache,target=/root/.git-cache \
-    git clone --depth 1 --branch svsm --recurse-submodules https://github.com/coconut-svsm/edk2.git || \
+RUN git clone --depth 1 --branch svsm --recurse-submodules https://github.com/coconut-svsm/edk2.git || \
     (git clone --branch svsm https://github.com/coconut-svsm/edk2.git && \
      cd edk2 && \
      git submodule update --init --recursive)

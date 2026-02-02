@@ -91,8 +91,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 # FROM edk2-firmware AS svsm-build
 FROM rust-setup AS svsm-build
 COPY --from=svsm-source /build/svsm /build/svsm
-# COPY --from=svsm-edk2:local /OVMF.fd /OVMF.fd
-ENV PATH="/root/.cargo/bin:${PATH}"
+COPY --from=svsm-edk2:local /OVMF.fd /OVMF.fd
 ENV FW_FILE="/OVMF.fd"
 WORKDIR /build/svsm
 

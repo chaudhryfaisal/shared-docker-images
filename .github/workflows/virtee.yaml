@@ -1,0 +1,108 @@
+name: virtee
+on:
+  push:
+    branches:
+      - virtee
+  workflow_dispatch:
+    inputs:
+      RUST_VERSION:
+        description: "Override Rust version (optional)"
+        required: false
+      SEVCTL_VERSION:
+        description: "Override sevctl version (optional)"
+        required: false
+      SNPHOST_VERSION:
+        description: "Override snphost version (optional)"
+        required: false
+      SNPGUEST_VERSION:
+        description: "Override snpguest version (optional)"
+        required: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # ---- SINGLE SOURCE OF TRUTH ----
+  RUST_VERSION: "1.90"
+  SEVCTL_VERSION: "0.6.2"
+  SNPHOST_VERSION: "0.7.0"
+  SNPGUEST_VERSION: "0.10.0"
+  # --------------------------------
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20
+        with:
+          cosign-release: 'v2.2.4'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
+
+      - name: Log into registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract base Docker metadata
+        id: meta
+        uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      # ---- RESOLVE EFFECTIVE VALUES ONCE ----
+      - name: Resolve build versions
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RUST_VERSION="${{ inputs.RUST_VERSION || env.RUST_VERSION }}"
+          SEVCTL_VERSION="${{ inputs.SEVCTL_VERSION || env.SEVCTL_VERSION }}"
+          SNPHOST_VERSION="${{ inputs.SNPHOST_VERSION || env.SNPHOST_VERSION }}"
+          SNPGUEST_VERSION="${{ inputs.SNPGUEST_VERSION || env.SNPGUEST_VERSION }}"
+
+          echo "RUST_VERSION=$RUST_VERSION" >> "$GITHUB_OUTPUT"
+          echo "SEVCTL_VERSION=$SEVCTL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "SNPHOST_VERSION=$SNPHOST_VERSION" >> "$GITHUB_OUTPUT"
+          echo "SNPGUEST_VERSION=$SNPGUEST_VERSION" >> "$GITHUB_OUTPUT"
+          echo "IMG_TAG=${{ env.REGISTRY }}/${{ github.repository }}:ci-virtee-sevctl${SEVCTL_VERSION}-snphost${SNPHOST_VERSION}-snpguest${SNPGUEST_VERSION}" >> "$GITHUB_OUTPUT"
+      # --------------------------------------
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.versions.outputs.IMG_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            RUST_VERSION=${{ steps.versions.outputs.RUST_VERSION }}
+            SEVCTL_VERSION=${{ steps.versions.outputs.SEVCTL_VERSION }}
+            SNPHOST_VERSION=${{ steps.versions.outputs.SNPHOST_VERSION }}
+            SNPGUEST_VERSION=${{ steps.versions.outputs.SNPGUEST_VERSION }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            
+      - name: Sign the published Docker image
+        if: github.event_name != 'pull_request'
+        env:
+          TAG: ${{ steps.versions.outputs.img_tag }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          cosign sign --yes "${TAG}@${DIGEST}"

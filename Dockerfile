@@ -28,7 +28,7 @@ RUN   --mount=type=cache,target=/build/app/target \
 
 FROM rust_builder AS snpguest_builder
 ARG SNPGUEST_VERSION=0.10.0
-RUN wget https://github.com/virtee/snpguest/archive/refs/tags/v${VER_SEVCTLSNPGUEST_VERSION}.tar.gz -O snpguest.tar.gz && \
+RUN wget https://github.com/virtee/snpguest/archive/refs/tags/v${SNPGUEST_VERSION}.tar.gz -O snpguest.tar.gz && \
     tar -xzf snpguest.tar.gz && mv snpguest-${SNPGUEST_VERSION} /build/app
 WORKDIR /build/app
 RUN   --mount=type=cache,target=/build/app/target \

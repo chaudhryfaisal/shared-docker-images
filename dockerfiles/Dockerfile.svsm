@@ -30,7 +30,7 @@ FROM base AS svsm-source
 
 WORKDIR /build
 ADD pre_clone /pre_clone
-RUN test -f pre_clone/svsm.tar.gz && tar -xzf pre_clone/svsm.tar.gz -C /build || \
+RUN test -f /pre_clone/svsm.tar.gz && tar -xzf /pre_clone/svsm.tar.gz -C /build || \
     git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/coconut-svsm/svsm.git
 
 FROM base AS rust-setup

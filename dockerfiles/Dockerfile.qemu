@@ -62,7 +62,7 @@ WORKDIR /build
 
 # Clone QEMU
 ADD pre_clone /pre_clone
-RUN test -f pre_clone/qemu.tar.gz && tar -xzf pre_clone/qemu.tar.gz -C /build || \
+RUN test -f /pre_clone/qemu.tar.gz && tar -xzf /pre_clone/qemu.tar.gz -C /build || \
     git clone --depth 1 --branch svsm-igvm https://github.com/coconut-svsm/qemu.git
 
 FROM qemu-source AS qemu-config

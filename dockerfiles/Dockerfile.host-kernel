@@ -30,7 +30,7 @@ WORKDIR /build
 
 # Clone Linux kernel with SVSM support
 ADD pre_clone /pre_clone
-RUN test -f pre_clone/linux.tar.gz && tar -xzf pre_clone/linux.tar.gz -C /build || \
+RUN test -f /pre_clone/linux.tar.gz && tar -xzf /pre_clone/linux.tar.gz -C /build || \
     git clone --depth 1 --branch svsm https://github.com/coconut-svsm/linux.git
 
 FROM source AS config

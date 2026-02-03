@@ -28,7 +28,7 @@ FROM base AS source
 
 WORKDIR /build
 ADD pre_clone /pre_clone
-RUN test -f pre_clone/edk2.tar.gz && tar -xzf pre_clone/edk2.tar.gz -C /build || \
+RUN test -f /pre_clone/edk2.tar.gz && tar -xzf /pre_clone/edk2.tar.gz -C /build || \
     git clone --depth 1 --branch svsm --recurse-submodules --shallow-submodules https://github.com/coconut-svsm/edk2.git
 
 FROM source AS setup

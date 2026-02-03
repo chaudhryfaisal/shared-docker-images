@@ -1,7 +1,7 @@
 ARG RUST_VERSION=1.90
 FROM rust:${RUST_VERSION}-alpine AS rust_builder
-RUN apk add --no-cache build-base musl-dev openssl-libs-static
 RUN rustup target add x86_64-unknown-linux-musl
+RUN apk add --no-cache build-base musl-dev openssl-libs-static perl
 WORKDIR /build/app
 
 FROM rust_builder AS sevctl_builder

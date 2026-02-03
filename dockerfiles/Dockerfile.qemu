@@ -1,72 +1,74 @@
-# Dockerfile for building QEMU with IGVM support (static build)
-# Multi-stage build for efficient caching
+# Dockerfile for building QEMU with IGVM support (Ubuntu 22.04)
+# Uses buildkit cache mounts for Rust
 
-FROM alpine:3.19 AS base
-
-# Install build dependencies for static QEMU build
-RUN apk add --no-cache \
-    build-base \
+# Stage 0: Base dependencies
+FROM ubuntu:22.04 AS base
+ENV DEBIAN_FRONTEND=noninteractive
+RUN sed -i 's|http://|https://|g' /etc/apt/sources.list && \
+    printf 'Acquire::https::Verify-Peer "false";\nAcquire::https::Verify-Host "false";\n' \
+      > /etc/apt/apt.conf.d/99insecure-https
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends \
+    build-essential \
     git \
     python3 \
-    py3-pip \
-    ninja \
+    python3-pip \
+    python3-tomli \
+    ninja-build \
     meson \
-    pkgconfig \
-    glib-dev \
-    glib-static \
-    pixman-dev \
-    pixman-static \
-    zlib-dev \
-    zlib-static \
+    pkg-config \
+    libglib2.0-dev \
+    libpixman-1-dev \
+    zlib1g-dev \
     libffi-dev \
-    perl \
-    bash \
-    linux-headers \
     libcap-ng-dev \
-    libcap-ng-static \
     libseccomp-dev \
-    libseccomp-static \
+    libunwind-dev \
+    libssl-dev \
+    libaio-dev \
+    libattr1-dev \
     wget \
     curl \
+    perl \
+    bash \
+    linux-headers-generic \
     ca-certificates \
-    openssl-libs-static \
-    libunwind-dev libunwind-static
+ && rm -rf /var/lib/apt/lists/*
 
+# Stage 1: Install Rust and cargo utilities with caching
 ARG RUST_VERSION=1.93.0
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION} --profile minimal
 ENV PATH="/root/.cargo/bin:${PATH}"
 
+# Pre-install cargo-c and cbindgen using cache mounts
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/cargo-target-install \
     cargo install cargo-c cbindgen --target-dir /cargo-target-install
 
 FROM base AS igvm-build
-
 WORKDIR /build
 
-# Build IGVM library (required for QEMU)
+# Build IGVM with caching
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.git-cache \
     --mount=type=cache,target=/cargo-target-igvm \
     git clone --depth 1 https://github.com/microsoft/igvm.git && \
     cd igvm && \
-    CARGO_TARGET_DIR=/cargo-target-igvm make -f igvm_c/Makefile install PREFIX=/usr/local INSTALL_SHARED=0
+    CARGO_TARGET_DIR=/cargo-target-igvm make -f igvm_c/Makefile install PREFIX=/usr/local
 
 FROM igvm-build AS qemu-source
-
 WORKDIR /build
 
-# Clone QEMU with SVSM/IGVM support
-RUN --mount=type=cache,target=/root/.git-cache \
-    git clone --depth 1 --branch svsm-igvm https://github.com/coconut-svsm/qemu.git || \
-    git clone --branch svsm-igvm https://github.com/coconut-svsm/qemu.git
+# Clone QEMU
+ADD pre_clone /pre_clone
+RUN test -f pre_clone/qemu.tar.gz && tar -xzf pre_clone/qemu.tar.gz -C /build || \
+    git clone --depth 1 --branch svsm-igvm https://github.com/coconut-svsm/qemu.git
 
 FROM qemu-source AS qemu-config
-
 WORKDIR /build/qemu
 
-# Configure QEMU for static build with IGVM support
+# Configure QEMU
 ENV PATH="/root/.cargo/bin:$PATH"
 RUN PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/pkgconfig" \
     C_INCLUDE_PATH="/usr/local/include" \
@@ -75,7 +77,6 @@ RUN PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/pkgconfig" \
     --prefix=/usr/local \
     --target-list=x86_64-softmmu \
     --enable-igvm \
-    --static \
     --disable-docs \
     --disable-gtk \
     --disable-sdl \
@@ -97,10 +98,8 @@ RUN PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/pkgconfig" \
     --disable-vvfat \
     --disable-qcow1 \
     --disable-parallels \
-    --disable-sheepdog \
     --disable-guest-agent \
     --disable-tpm \
-    --disable-live-block-migration \
     --disable-numa \
     --disable-replication \
     --enable-kvm \
@@ -108,27 +107,18 @@ RUN PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/pkgconfig" \
     --enable-attr
 
 FROM qemu-config AS qemu-build
-
 WORKDIR /build/qemu
 
-# Build QEMU statically
+# Build QEMU using cached build outputs
 RUN --mount=type=cache,target=/root/.cache \
-    ninja -C build && \
-    ninja -C build install
-
-# Verify static build
-RUN ldd /usr/local/bin/qemu-system-x86_64 2>&1 | grep -q "not a dynamic executable" || \
-    (echo "Warning: QEMU may not be fully static" && \
-     ldd /usr/local/bin/qemu-system-x86_64)
+    make -j$(nproc) && make install
 
 FROM qemu-build AS output
-
-# Copy binaries to known location
 RUN mkdir -p /output && \
     cp /usr/local/bin/qemu-system-x86_64 /output/ && \
     cp /usr/local/bin/qemu-img /output/ && \
     strip /output/qemu-system-x86_64 /output/qemu-img
 
-# Final stage with just the QEMU binaries
-FROM scratch AS export
-COPY --from=output /output/* /
+FROM ubuntu:22.04  AS export
+CMD ["/bin/bash"]
+COPY --from=output /output /output

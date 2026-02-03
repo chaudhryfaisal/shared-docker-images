@@ -24,3 +24,6 @@ build.log
 tmp/
 temp/
 .cache/
+
+# pre_clone files
+pre_clone/*.tar.gz

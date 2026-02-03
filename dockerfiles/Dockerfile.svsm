@@ -1,13 +1,14 @@
 # Dockerfile for building COCONUT-SVSM
 # Multi-stage build for efficient caching
 
+
 FROM ubuntu:22.04 AS base
-
-# Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN sed -i 's|http://|https://|g' /etc/apt/sources.list && \
+    printf 'Acquire::https::Verify-Peer "false";\nAcquire::https::Verify-Host "false";\n' \
+      > /etc/apt/apt.conf.d/99insecure-https
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends \
     build-essential \
     git \
     curl \
@@ -28,10 +29,9 @@ RUN apt-get update && apt-get install -y \
 FROM base AS svsm-source
 
 WORKDIR /build
-RUN git clone --depth 1 --recurse-submodules https://github.com/coconut-svsm/svsm.git || \
-    (git clone https://github.com/coconut-svsm/svsm.git && \
-     cd svsm && \
-     git submodule update --init --recursive)
+ADD pre_clone /pre_clone
+RUN test -f pre_clone/svsm.tar.gz && tar -xzf pre_clone/svsm.tar.gz -C /build || \
+    git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/coconut-svsm/svsm.git
 
 FROM base AS rust-setup
 ARG RUST_VERSION=1.93.0
@@ -118,5 +118,6 @@ RUN mkdir -p /output && \
     cp /build/svsm/bin/coconut-qemu.igvm /output/
 
 # Final stage with just the SVSM binaries
-FROM scratch AS export
-COPY --from=output /output/* /
+FROM ubuntu:22.04  AS export
+CMD ["/bin/bash"]
+COPY --from=output /output /output

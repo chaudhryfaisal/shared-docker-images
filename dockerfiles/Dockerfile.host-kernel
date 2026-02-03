@@ -2,12 +2,12 @@
 # Multi-stage build for efficient caching
 
 FROM ubuntu:22.04 AS base
-
-# Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
+RUN sed -i 's|http://|https://|g' /etc/apt/sources.list && \
+    printf 'Acquire::https::Verify-Peer "false";\nAcquire::https::Verify-Host "false";\n' \
+      > /etc/apt/apt.conf.d/99insecure-https
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends \
     build-essential \
     libncurses-dev \
     bison \
@@ -29,9 +29,9 @@ FROM base AS source
 WORKDIR /build
 
 # Clone Linux kernel with SVSM support
-RUN --mount=type=cache,target=/root/.git-cache \
-    git clone --depth 1 --branch svsm https://github.com/coconut-svsm/linux.git || \
-    git clone --branch svsm https://github.com/coconut-svsm/linux.git
+ADD pre_clone /pre_clone
+RUN test -f pre_clone/linux.tar.gz && tar -xzf pre_clone/linux.tar.gz -C /build || \
+    git clone --depth 1 --branch svsm https://github.com/coconut-svsm/linux.git
 
 FROM source AS config
 
@@ -73,5 +73,6 @@ RUN mkdir -p /output && \
     cp .config /output/config
 
 # Final stage with just the kernel
-FROM scratch AS export
-COPY --from=output /output/* /
+FROM ubuntu:22.04  AS export
+CMD ["/bin/bash"]
+COPY --from=output /output/ /output

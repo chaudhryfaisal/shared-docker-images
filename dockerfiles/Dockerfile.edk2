@@ -2,12 +2,12 @@
 # Multi-stage build for efficient caching
 
 FROM ubuntu:22.04 AS base
-
-# Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
-
-# Install build dependencies for EDK2
-RUN apt-get update && apt-get install -y \
+RUN sed -i 's|http://|https://|g' /etc/apt/sources.list && \
+    printf 'Acquire::https::Verify-Peer "false";\nAcquire::https::Verify-Host "false";\n' \
+      > /etc/apt/apt.conf.d/99insecure-https
+RUN apt-get update
+RUN apt-get install -y --no-install-recommends \
     build-essential \
     uuid-dev \
     iasl \
@@ -27,12 +27,9 @@ RUN apt-get update && apt-get install -y \
 FROM base AS source
 
 WORKDIR /build
-
-# Clone EDK2 with SVSM support
-RUN git clone --depth 1 --branch svsm --recurse-submodules https://github.com/coconut-svsm/edk2.git || \
-    (git clone --branch svsm https://github.com/coconut-svsm/edk2.git && \
-     cd edk2 && \
-     git submodule update --init --recursive)
+ADD pre_clone /pre_clone
+RUN test -f pre_clone/edk2.tar.gz && tar -xzf pre_clone/edk2.tar.gz -C /build || \
+    git clone --depth 1 --branch svsm --recurse-submodules --shallow-submodules https://github.com/coconut-svsm/edk2.git
 
 FROM source AS setup
 
@@ -74,5 +71,6 @@ RUN mkdir -p /output && \
     cp Build/OvmfX64/DEBUG_GCC5/FV/OVMF_VARS.fd /output/OVMF_VARS.fd 2>/dev/null || true
 
 # Final stage with just the firmware
-FROM scratch AS export
-COPY --from=output /output/* /
+FROM ubuntu:22.04  AS export
+CMD ["/bin/bash"]
+COPY --from=output /output /output

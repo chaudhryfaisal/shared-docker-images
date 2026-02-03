@@ -5,7 +5,7 @@
 # Docker configuration
 DOCKER_BUILDKIT ?= 1
 PROGRESS ?= plain
-DOCKER_BUILD = DOCKER_BUILDKIT=$(DOCKER_BUILDKIT) docker build --progress=$(PROGRESS)
+DOCKER_BUILD = DOCKER_BUILDKIT=$(DOCKER_BUILDKIT) docker build --network host --progress=$(PROGRESS)
 
 # Image tags
 TAG_HOST_KERNEL = svsm-host-kernel:local
@@ -44,11 +44,12 @@ help:
 	@echo "  PROGRESS=plain       - Build output format (default: plain)"
 
 # Build all components in parallel where possible
-build-all: build-host-kernel build-guest-kernel
+build-all:
 	@echo "Building EDK2 and QEMU in parallel..."
-	@$(MAKE) -j2 build-edk2 build-qemu
+	$(MAKE) build-qemu
 	@echo "Building SVSM (requires EDK2)..."
-	@$(MAKE) build-svsm
+	$(MAKE) build-edk2 build-svsm
+	$(MAKE) build-host-kernel build-guest-kernel
 	@echo "All components built successfully!"
 
 # Individual component builds
@@ -130,3 +131,18 @@ clean:
 	-docker rmi $(TAG_HOST_KERNEL) $(TAG_GUEST_KERNEL) $(TAG_EDK2) $(TAG_QEMU) $(TAG_SVSM) 2>/dev/null || true
 	-rm -rf $(ARTIFACTS_DIR)
 	@echo "Cleanup complete!"
+pre-clone:
+	test -d pre_clone || mkdir pre_clone
+	test -s pre_clone/svsm.tar.gz || ( \
+		git clone --depth 1 --branch main --recurse-submodules --shallow-submodules https://github.com/coconut-svsm/svsm.git && \
+		tar -czf pre_clone/svsm.tar.gz svsm && rm -rf svsm )
+	test -s pre_clone/qemu.tar.gz || ( \
+		git clone --depth 1 --branch svsm-igvm https://github.com/coconut-svsm/qemu.git && \
+		tar -czf pre_clone/qemu.tar.gz qemu && rm -rf qemu )
+	test -s pre_clone/linux.tar.gz || ( \
+		git clone --depth 1 --branch svsm https://github.com/coconut-svsm/linux.git && \
+		tar -czf pre_clone/linux.tar.gz linux && rm -rf linux )
+	test -s pre_clone/edk2.tar.gz || ( \
+		git clone --depth 1 --branch svsm --recurse-submodules --shallow-submodules https://github.com/coconut-svsm/edk2.git && \
+		tar -czf pre_clone/edk2.tar.gz edk2 && rm -rf edk2 )
+	ls -lah pre_clone

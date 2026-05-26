@@ -1,22 +1,26 @@
-name: qemu
+name: llama_cpp
 
 on:
   push:
     branches:
-      - qemu
+      - llama_cpp
   workflow_dispatch:
     inputs:
-      QEMU_VERSION:
-        description: "Override qemu version (optional)"
+      LLAMA_CPP_TAG:
+        description: "Override llama_cpp tag (optional)"
+        required: false
+      CUDA_VERSION:
+        description: "Override cuda_version tag (optional)"
         required: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  QEMU_VERSION: "10.2.1"
+  LLAMA_CPP_TAG: "b9330"
+  CUDA_VERSION: "13.0.0"
 
 concurrency:
-  group: qemu-${{ github.ref }}
+  group: llama_cpp-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -32,9 +36,7 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - qemu_amd_sev_snp_static_min
-          - qemu_amd_sev_snp_static
-          - qemu_amd_sev_snp
+          - server
 
     steps:
       - name: Checkout repository
@@ -45,8 +47,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          QEMU_VERSION="${{ inputs.QEMU_VERSION || env.QEMU_VERSION }}"
-          echo "QEMU_VERSION=$QEMU_VERSION" >> "$GITHUB_OUTPUT"
+          LLAMA_CPP_TAG="${{ inputs.LLAMA_CPP_TAG || env.LLAMA_CPP_TAG }}"
+          CUDA_VERSION="${{ inputs.CUDA_VERSION || env.CUDA_VERSION }}"
+          echo "LLAMA_CPP_TAG=$LLAMA_CPP_TAG" >> "$GITHUB_OUTPUT"
+          echo "CUDA_VERSION=$CUDA_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -68,14 +72,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${{ steps.versions.outputs.QEMU_VERSION }}"
+          VERSION="${{ steps.versions.outputs.LLAMA_CPP_TAG }}"
+          CUDA_VERSION="${{ steps.versions.outputs.CUDA_VERSION }}"
           TARGET="${{ matrix.target }}"
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
 
           echo "IMAGE=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "VERSION_TAG=$IMAGE:$TARGET-$VERSION" >> "$GITHUB_OUTPUT"
-          echo "SHA_TAG=$IMAGE:$TARGET-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          echo "LATEST_TAG=$IMAGE:$TARGET" >> "$GITHUB_OUTPUT"
+          echo "VERSION_TAG=$IMAGE:$TARGET-$VERSION-$CUDA_VERSION" >> "$GITHUB_OUTPUT"
+          echo "LATEST_TAG=$IMAGE:$TARGET-$CUDA_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
         id: build
@@ -87,14 +91,13 @@ jobs:
           platforms: linux/amd64
           tags: |
             ${{ steps.tags.outputs.VERSION_TAG }}
-            ${{ steps.tags.outputs.SHA_TAG }}
             ${{ steps.tags.outputs.LATEST_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
           build-args: |
-            QEMU_VERSION=${{ steps.versions.outputs.QEMU_VERSION }}
+            LLAMA_CPP_VERSION=${{ steps.versions.outputs.LLAMA_CPP_VERSION }}
 
       - name: Sign published image (version tag)
         if: github.event_name != 'pull_request'

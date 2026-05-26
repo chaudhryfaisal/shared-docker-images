@@ -1,184 +1,116 @@
-ARG BASE=alpine:3.19
+ARG UBUNTU_VERSION=24.04
+# This needs to generally match the container host's environment.
+ARG CUDA_VERSION=12.8.1
+# Target the CUDA build image
+ARG BASE_CUDA_DEV_CONTAINER=nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
 
-FROM ${BASE} AS base
-FROM base AS builder
+ARG BASE_CUDA_RUN_CONTAINER=nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
 
-# Install build dependencies for static QEMU compilation
-# We need more dependencies than the kernel build because QEMU is more complex
-RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
-    apk add --no-cache \
-        build-base python3 py3-pip ninja meson pkgconfig glib-dev glib-static pixman-dev \
-        pixman-static zlib-dev zlib-static linux-headers bash wget perl bison flex \
-        libseccomp-dev libseccomp-static git bzip2-dev bzip2-static ncurses-static util-linux-dev util-linux-static
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
 
-FROM builder AS src
-WORKDIR /build
-ARG QEMU_VERSION=10.2.1
-RUN --mount=type=cache,target=/tmp/qemu-downloads \
-    echo "Downloading QEMU ${QEMU_VERSION} source tarball..." && \
-    if [ ! -f /tmp/qemu-downloads/qemu-${QEMU_VERSION}.tar.xz ]; then \
-        echo "Cache miss - downloading from qemu.org..." && \
-        wget --progress=dot:giga \
-             -O /tmp/qemu-downloads/qemu-${QEMU_VERSION}.tar.xz \
-             https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz && \
-        echo "Download complete, cached for future builds"; \
-    else \
-        echo "Cache hit - using cached tarball"; \
+FROM ${BASE_CUDA_DEV_CONTAINER} AS build
+
+# CUDA architecture to build for (defaults to all supported archs)
+ARG CUDA_DOCKER_ARCH=default
+
+RUN apt-get update && \
+    apt-get install -y gcc-14 g++-14 build-essential cmake python3 python3-pip git libssl-dev libgomp1
+
+ENV CC=gcc-14 CXX=g++-14 CUDAHOSTCXX=g++-14
+
+WORKDIR /app
+
+ARG LLAMA_CPP_TAG=b9330
+RUN git clone --depth 1 --branch ${LLAMA_CPP_TAG} https://github.com/ggml-org/llama.cpp.git /app
+
+RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
+    export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
     fi && \
-    echo "Extracting QEMU source..." && \
-    tar xf /tmp/qemu-downloads/qemu-${QEMU_VERSION}.tar.xz && \
-    mv qemu-${QEMU_VERSION} qemu && \
-    echo "QEMU source ready at /build/qemu"
-WORKDIR /build/qemu/build
-#RUN apk add --no-cache
+    cmake -B build -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_BUILD_TESTS=OFF ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
+    cmake --build build --config Release -j$(nproc)
 
-FROM src AS qemu_amd_sev_snp_builder
-ARG SKIP_BUILD=false
-RUN --mount=type=cache,target=/build/qemu/build \
-    echo "Configuring QEMU ..." && \
-    ../configure \
-        --prefix=/usr/local \
-        --target-list=x86_64-softmmu \
-        --enable-kvm \
-        --enable-seccomp \
-        --disable-werror \
-    && echo "QEMU configured successfully"
-RUN --mount=type=cache,target=/build/qemu/build \
-  if [ "$SKIP_BUILD" = "true" ]; then \
-    echo "Skipping build (SKIP_BUILD=true)" && mkdir -p /build/qemu-install/usr/local/bin && touch /build/qemu-install/usr/local/bin/qemu-system-x86_64; \
-  else \
-    echo "Building QEMU with $(nproc) parallel jobs..." && \
-    ninja -C . -j$(nproc) && \
-    echo "Installing QEMU" && \
-    DESTDIR=/build/qemu-install ninja -C . install && \
-    echo "QEMU build complete" && \
-    strip /build/qemu-install/usr/local/bin/qemu-system-x86_64 && \
-    echo "QEMU binary stripped" && \
-    ls -lh /build/qemu-install/usr/local/bin/qemu-system-x86_64; \
-  fi
-RUN if [ "$SKIP_BUILD" != "true" ]; then /build/qemu-install/usr/local/bin/qemu-system-x86_64 -machine help; fi
+RUN mkdir -p /app/lib && \
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
 
-FROM src AS qemu_amd_sev_snp_static_builder
-ARG SKIP_BUILD=false
-RUN --mount=type=cache,target=/build/qemu/build \
-    echo "Configuring QEMU ..." && \
-    LDFLAGS="-Wl,--allow-multiple-definition" \
-    ../configure \
-        --prefix=/usr/local \
-        --static \
-        --target-list=x86_64-softmmu \
-        --enable-kvm \
-        --enable-seccomp \
-        --disable-werror \
-    && echo "QEMU configured successfully"
-RUN --mount=type=cache,target=/build/qemu/build \
-  if [ "$SKIP_BUILD" = "true" ]; then \
-    echo "Skipping build (SKIP_BUILD=true)" && mkdir -p /build/qemu-install/usr/local/bin && touch /build/qemu-install/usr/local/bin/qemu-system-x86_64; \
-  else \
-    echo "Building QEMU with $(nproc) parallel jobs..." && \
-    ninja -C . -j$(nproc) && \
-    echo "Installing QEMU" && \
-    DESTDIR=/build/qemu-install ninja -C . install && \
-    echo "QEMU build complete" && \
-    strip /build/qemu-install/usr/local/bin/qemu-system-x86_64 && \
-    echo "QEMU binary stripped" && \
-    ls -lh /build/qemu-install/usr/local/bin/qemu-system-x86_64; \
-  fi
-RUN if [ "$SKIP_BUILD" != "true" ]; then /build/qemu-install/usr/local/bin/qemu-system-x86_64 -machine help; fi
+RUN mkdir -p /app/full \
+    && cp build/bin/* /app/full \
+    && cp *.py /app/full \
+    && cp -r conversion /app/full \
+    && cp -r gguf-py /app/full \
+    && cp -r requirements /app/full \
+    && cp requirements.txt /app/full \
+    && cp .devops/tools.sh /app/full/tools.sh
 
-FROM src AS qemu_amd_sev_snp_static_min_builder
-ARG SKIP_BUILD=false
-RUN --mount=type=cache,target=/build/qemu/build \
-    echo "Configuring QEMU with Q35-only machine..." && \
-    mkdir -p /build/qemu/configs/devices/x86_64-softmmu && \
-    echo "# Minimal Q35-only configuration" > /build/qemu/configs/devices/x86_64-softmmu/x86_64-softmmu-minimal.mak && \
-    echo "include ../i386-softmmu/default.mak" >> /build/qemu/configs/devices/x86_64-softmmu/x86_64-softmmu-minimal.mak && \
-    echo "CONFIG_ISAPC=n" >> /build/qemu/configs/devices/x86_64-softmmu/x86_64-softmmu-minimal.mak && \
-    echo "CONFIG_I440FX=n" >> /build/qemu/configs/devices/x86_64-softmmu/x86_64-softmmu-minimal.mak && \
-    echo "CONFIG_MICROVM=n" >> /build/qemu/configs/devices/x86_64-softmmu/x86_64-softmmu-minimal.mak && \
-    echo "CONFIG_NITRO_ENCLAVE=n" >> /build/qemu/configs/devices/x86_64-softmmu/x86_64-softmmu-minimal.mak && \
-    cat /build/qemu/configs/devices/x86_64-softmmu/x86_64-softmmu-minimal.mak && \
-    ../configure \
-        --prefix=/usr/local \
-        --static \
-        --target-list=x86_64-softmmu \
-        \
-        --with-devices-x86_64=x86_64-softmmu-minimal \
-        \
-        --enable-kvm \
-        --disable-tcg \
-        \
-        --without-default-features \
-        \
-        --disable-docs \
-        --disable-tools \
-        --disable-debug-info \
-        --disable-debug-tcg \
-        --disable-qom-cast-debug \
-        \
-        --disable-gtk \
-        --disable-sdl \
-        --disable-sdl-image \
-        --disable-opengl \
-        --disable-virglrenderer \
-        --disable-vnc \
-        --disable-curses \
-        --disable-spice \
-        --disable-spice-protocol \
-        \
-        --disable-slirp \
-        \
-        --disable-nettle \
-        --disable-gcrypt \
-        --disable-gnutls \
-        \
-        --disable-libnfs \
-        --disable-libiscsi \
-        --disable-rbd \
-        --disable-glusterfs \
-        --disable-libpmem \
-        \
-        --disable-linux-user \
-        --disable-bsd-user \
-        --disable-guest-agent \
-        --disable-guest-agent-msi \
-        \
-        --disable-xen \
-        --disable-xen-pci-passthrough \
-        \
-        --audio-drv-list="" \
-        \
-        --disable-cap-ng \
-        --disable-attr \
-        \
-        --disable-debug-mutex \
-        --disable-sparse \
-        \
-        --enable-vhost-kernel \
-        --enable-fdt=disabled \
-    && echo "QEMU configured successfully"
+## Base image
+FROM ${BASE_CUDA_RUN_CONTAINER} AS base
 
-RUN --mount=type=cache,target=/build/qemu/build \
-  if [ "$SKIP_BUILD" = "true" ]; then \
-    echo "Skipping build (SKIP_BUILD=true)" && mkdir -p /build/qemu-install/usr/local/bin && touch /build/qemu-install/usr/local/bin/qemu-system-x86_64; \
-  else \
-    echo "Building QEMU with $(nproc) parallel jobs..." && \
-    ninja -C . -j$(nproc) && \
-    echo "Installing QEMU" && \
-    DESTDIR=/build/qemu-install ninja -C . install && \
-    echo "QEMU build complete" && \
-    strip /build/qemu-install/usr/local/bin/qemu-system-x86_64 && \
-    echo "QEMU binary stripped" && \
-    ls -lh /build/qemu-install/usr/local/bin/qemu-system-x86_64; \
-  fi
-RUN if [ "$SKIP_BUILD" != "true" ]; then /build/qemu-install/usr/local/bin/qemu-system-x86_64 -machine help; fi
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+ARG IMAGE_URL=https://github.com/ggml-org/llama.cpp
+ARG IMAGE_SOURCE=https://github.com/ggml-org/llama.cpp
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url=$IMAGE_URL \
+      org.opencontainers.image.source=$IMAGE_SOURCE
 
-FROM base AS qemu_amd_sev_snp_static_min
-COPY --from=qemu_amd_sev_snp_static_min_builder /build/qemu-install/usr/local /build/qemu
+RUN apt-get update \
+    && apt-get install -y libgomp1 curl \
+    && apt autoremove -y \
+    && apt clean -y \
+    && rm -rf /tmp/* /var/tmp/* \
+    && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
+    && find /var/cache -type f -delete
 
-FROM base AS qemu_amd_sev_snp_static
-COPY --from=qemu_amd_sev_snp_static_builder /build/qemu-install/usr/local /build/qemu
+COPY --from=build /app/lib/ /app
 
-FROM base AS qemu_amd_sev_snp
-RUN if [ "$SKIP_BUILD" != "true" ]; then apk add --no-cache pixman libseccomp glib ncurses-libs bzip2-dev; fi
-COPY --from=qemu_amd_sev_snp_builder /build/qemu-install/usr/local /build/qemu
+### Full
+FROM base AS full
+
+COPY --from=build /app/full /app
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y \
+    git \
+    python3 \
+    python3-pip \
+    python3-wheel \
+    && pip install --break-system-packages --upgrade setuptools \
+    && pip install --break-system-packages -r requirements.txt \
+    && apt autoremove -y \
+    && apt clean -y \
+    && rm -rf /tmp/* /var/tmp/* \
+    && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
+    && find /var/cache -type f -delete
+
+
+ENTRYPOINT ["/app/tools.sh"]
+
+### Light, CLI only
+FROM base AS light
+
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
+
+WORKDIR /app
+
+ENTRYPOINT [ "/app/llama-cli" ]
+
+### Server, Server only
+FROM base AS server
+
+ENV LLAMA_ARG_HOST=0.0.0.0
+
+COPY --from=build /app/full/llama-server /app
+
+WORKDIR /app
+
+HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
+
+ENTRYPOINT [ "/app/llama-server" ]

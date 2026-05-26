@@ -116,10 +116,10 @@ jobs:
         run: |
           cosign sign --yes "${TAG}@${DIGEST}"
 
-      - name: Sign published image (sha tag)
+      - name: Sign published image ( latest tag)
         if: github.event_name != 'pull_request'
         env:
-          TAG: ${{ steps.tags.outputs.SHA_TAG }}
+          TAG: ${{ steps.tags.outputs.LATEST_TAG }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           cosign sign --yes "${TAG}@${DIGEST}"

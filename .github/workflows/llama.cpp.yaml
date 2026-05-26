@@ -10,7 +10,10 @@ on:
         description: "Override llama_cpp tag (optional)"
         required: false
       CUDA_VERSION:
-        description: "Override cuda_version tag (optional)"
+        description: "Override cuda_version (optional)"
+        required: false
+      CUDA_DOCKER_ARCH:
+        description: "Override CUDA_DOCKER_ARCH (optional)"
         required: false
 
 env:
@@ -18,6 +21,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
   LLAMA_CPP_TAG: "b9330"
   CUDA_VERSION: "13.0.0"
+  CUDA_DOCKER_ARCH: "default"
 
 concurrency:
   group: llama_cpp-${{ github.ref }}
@@ -49,8 +53,10 @@ jobs:
           set -euo pipefail
           LLAMA_CPP_TAG="${{ inputs.LLAMA_CPP_TAG || env.LLAMA_CPP_TAG }}"
           CUDA_VERSION="${{ inputs.CUDA_VERSION || env.CUDA_VERSION }}"
+          CUDA_DOCKER_ARCH="${{ inputs.CUDA_DOCKER_ARCH || env.CUDA_DOCKER_ARCH }}"
           echo "LLAMA_CPP_TAG=$LLAMA_CPP_TAG" >> "$GITHUB_OUTPUT"
           echo "CUDA_VERSION=$CUDA_VERSION" >> "$GITHUB_OUTPUT"
+          echo "CUDA_DOCKER_ARCH=$CUDA_DOCKER_ARCH" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -74,12 +80,13 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.versions.outputs.LLAMA_CPP_TAG }}"
           CUDA_VERSION="${{ steps.versions.outputs.CUDA_VERSION }}"
+          CUDA_DOCKER_ARCH="${{ steps.versions.outputs.CUDA_DOCKER_ARCH }}"
           TARGET="${{ matrix.target }}"
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
 
           echo "IMAGE=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "VERSION_TAG=$IMAGE:$TARGET-$VERSION-$CUDA_VERSION" >> "$GITHUB_OUTPUT"
-          echo "LATEST_TAG=$IMAGE:$TARGET-$CUDA_VERSION" >> "$GITHUB_OUTPUT"
+          echo "VERSION_TAG=$IMAGE:$TARGET-$VERSION-cuda$CUDA_VERSION-arch$CUDA_DOCKER_ARCH" >> "$GITHUB_OUTPUT"
+          echo "LATEST_TAG=$IMAGE:$TARGET-cuda$CUDA_VERSION-arch$CUDA_DOCKER_ARCH" >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
         id: build
@@ -99,6 +106,7 @@ jobs:
           build-args: |
             LLAMA_CPP_VERSION=${{ steps.versions.outputs.LLAMA_CPP_VERSION }}
             CUDA_VERSION=${{ steps.versions.outputs.CUDA_VERSION }}
+            CUDA_DOCKER_ARCH=${{ steps.versions.outputs.CUDA_DOCKER_ARCH }}
 
       - name: Sign published image (version tag)
         if: github.event_name != 'pull_request'

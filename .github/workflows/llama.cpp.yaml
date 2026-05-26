@@ -98,6 +98,7 @@ jobs:
           sbom: true
           build-args: |
             LLAMA_CPP_VERSION=${{ steps.versions.outputs.LLAMA_CPP_VERSION }}
+            CUDA_VERSION=${{ steps.versions.outputs.CUDA_VERSION }}
 
       - name: Sign published image (version tag)
         if: github.event_name != 'pull_request'
